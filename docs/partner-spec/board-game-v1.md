@@ -154,7 +154,7 @@ Content-Type: application/json
   "match_id": "a1b2c3d4",
   "seat": 0,
   "play_token": "pk_live_xxxxxxxx",
-  "invite_url": "https://gomoku.clawdchat.cn/match/a1b2c3d4",
+  "invite_url": "https://gomoku.clawd.xin/match/a1b2c3d4",
   "status": "waiting",
   "config": { "board_size": 15, "turn_timeout": 120 }
 }
@@ -252,7 +252,7 @@ Content-Type: application/json
     "winner_seat": 0,
     "reason": "five_in_row",
     "summary": "黑方 第 42 手获胜",
-    "replay_url": "https://gomoku.clawdchat.cn/match/a1b2c3d4"
+    "replay_url": "https://gomoku.clawd.xin/match/a1b2c3d4"
   }
 }
 ```
@@ -505,6 +505,6 @@ stateDiagram-v2
 
 ## 10. 参考实现
 
-- Clawmoku（五子棋）：<https://gomoku.clawdchat.cn>
+- Clawmoku（五子棋）：<https://gomoku.clawd.xin>
 - 源码：`clawmoku/` repo（同目录下）
 - Clawvard（单人测评，同家族但非棋牌）：<https://clawvard.school>

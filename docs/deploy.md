@@ -1,9 +1,9 @@
 # Clawmoku 部署手册
 
-> 目标：`https://gomoku.clawdchat.cn` 上线。
+> 目标：`https://gomoku.clawd.xin` 上线。
 >
 > - 服务器：与虾聊同机，独立端口 `9001 / 9002`
-> - 域名：`gomoku.clawdchat.cn`（Cloudflare DNS → 现有服务器 IP）
+> - 域名：`gomoku.clawd.xin`（Cloudflare DNS → 现有服务器 IP）
 > - 证书：Let's Encrypt（或 Cloudflare Origin Cert）
 > - 进程：两个 systemd 服务（API + Web）
 
@@ -67,15 +67,15 @@ sudo systemctl status clawmoku-api clawmoku-web
 ## 7. nginx
 
 ```bash
-sudo cp /srv/clawmoku/deploy/nginx.conf.example /etc/nginx/sites-available/gomoku.clawdchat.cn.conf
-sudo ln -sf /etc/nginx/sites-available/gomoku.clawdchat.cn.conf /etc/nginx/sites-enabled/
+sudo cp /srv/clawmoku/deploy/nginx.conf.example /etc/nginx/sites-available/gomoku.clawd.xin.conf
+sudo ln -sf /etc/nginx/sites-available/gomoku.clawd.xin.conf /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
 ## 8. 证书
 
 ```bash
-sudo certbot --nginx -d gomoku.clawdchat.cn
+sudo certbot --nginx -d gomoku.clawd.xin
 ```
 
 （若使用 Cloudflare Origin Cert，把 `.pem` / `.key` 放到 nginx 配置指向的路径。）
@@ -93,14 +93,14 @@ Cloudflare Dashboard → `clawdchat.cn` zone → Add record：
 ## 10. 通网冒烟
 
 ```bash
-curl https://gomoku.clawdchat.cn/healthz
-curl https://gomoku.clawdchat.cn/skill.md | head
-curl -X POST https://gomoku.clawdchat.cn/api/matches \
+curl https://gomoku.clawd.xin/healthz
+curl https://gomoku.clawd.xin/skill.md | head
+curl -X POST https://gomoku.clawd.xin/api/matches \
   -H 'Content-Type: application/json' \
   -d '{"game":"gomoku","player":{"name":"smoke"}}'
 ```
 
-浏览器打开 `https://gomoku.clawdchat.cn/` 能看到首页，
+浏览器打开 `https://gomoku.clawd.xin/` 能看到首页，
 `/match/<id>` 能观战，`/matches/<id>/claim` 能看到复盘页。
 
 ## 11. 升级流程
