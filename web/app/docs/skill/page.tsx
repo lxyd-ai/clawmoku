@@ -1,6 +1,8 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { SkillCurlCta } from "@/components/skill-curl-cta";
 
@@ -12,9 +14,6 @@ export const metadata: Metadata = {
 
 async function loadSkill(): Promise<string> {
   const internal = process.env.CLAWMOKU_API_INTERNAL || "http://127.0.0.1:9001";
-  // Propagate the public-facing host to the API so `_localize_docs` rewrites
-  // canonical URLs to the domain the user actually typed (e.g.
-  // gomoku.clawd.xin), instead of the internal 127.0.0.1:9001 it sees.
   const h = headers();
   const fwdHost =
     h.get("x-forwarded-host") || h.get("host") || "";
@@ -36,10 +35,27 @@ async function loadSkill(): Promise<string> {
   }
 }
 
+/** Clean raw skill.md for browser rendering:
+ *  1. Remove the <!-- clawmoku:doc-rewrite … --> banner (added on URL mismatch).
+ *  2. Strip YAML front-matter (---…---).
+ */
+function prepareMarkdown(text: string): string {
+  // 1. Remove doc-rewrite HTML comment (may span one line)
+  let s = text.replace(/<!--\s*clawmoku:doc-rewrite[^>]*-->\n?/g, "").trimStart();
+  // 2. Strip YAML frontmatter
+  if (s.startsWith("---")) {
+    const end = s.indexOf("\n---", 3);
+    if (end !== -1) s = s.slice(end + 4).trimStart();
+  }
+  return s;
+}
+
 export const dynamic = "force-dynamic";
 
 export default async function SkillPage() {
-  const md = await loadSkill();
+  const raw = await loadSkill();
+  const md = prepareMarkdown(raw);
+
   return (
     <div className="mx-auto max-w-4xl px-5 py-12">
       <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
@@ -56,6 +72,14 @@ export default async function SkillPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <a
+            href="/skill.md"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-full border border-wood-200 bg-white px-4 py-2 text-sm font-medium text-ink-800 hover:border-wood-300"
+          >
+            skill.md (raw) ↗
+          </a>
           <a
             href="/protocol.md"
             target="_blank"
@@ -74,9 +98,19 @@ export default async function SkillPage() {
           <span className="font-mono">skill.md</span>
           <span>zh-CN · markdown</span>
         </div>
-        <pre className="overflow-auto whitespace-pre-wrap break-words px-5 py-6 font-mono text-[13px] leading-7 text-ink-800">
-{md}
-        </pre>
+        <div className="prose prose-stone max-w-none px-6 py-6
+          prose-headings:font-display prose-headings:text-wood-800
+          prose-h1:text-3xl prose-h2:text-2xl prose-h3:text-xl
+          prose-a:text-accent-600 prose-a:no-underline hover:prose-a:underline
+          prose-code:rounded prose-code:bg-cream-100 prose-code:px-1.5 prose-code:py-0.5
+          prose-code:text-wood-700 prose-code:before:content-none prose-code:after:content-none
+          prose-pre:bg-ink-900 prose-pre:text-cream-50 prose-pre:rounded-xl prose-pre:overflow-x-auto
+          [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-cream-50 [&_pre_code]:text-[13px]
+          prose-blockquote:border-wood-300 prose-blockquote:text-ink-600
+          prose-strong:text-ink-800 prose-hr:border-wood-100
+          prose-table:text-sm prose-th:bg-cream-50 prose-th:text-ink-700 prose-tr:border-wood-100">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+        </div>
       </div>
 
       <div className="mt-10 flex items-center justify-between text-sm">
