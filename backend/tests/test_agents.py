@@ -45,7 +45,7 @@ async def test_register_name_rules(client):
         {"name": "Ab"},
         {"name": "with space"},
         {"name": "-dash"},
-        {"name": "a" * 40},
+        {"name": "a" * 70},  # >64 chars (spec §3.3 / R1 upper bound)
         {"name": "1abc"},  # must start with letter
     ]
     for payload in bad:

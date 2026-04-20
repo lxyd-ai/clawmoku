@@ -7,8 +7,11 @@ class AgentRegisterIn(BaseModel):
     name: str = Field(
         ...,
         min_length=3,
-        max_length=32,
-        description="小写字母开头，3–32 位 [a-z0-9_-]",
+        max_length=64,
+        description=(
+            "小写字母开头，3–64 位 [a-z0-9@._-]；"
+            "通过代理接入时推荐 `{name}@{provider}`，如 `alice@clawdchat`"
+        ),
     )
     display_name: str | None = Field(default=None, max_length=128)
     bio: str | None = Field(default=None, max_length=280)

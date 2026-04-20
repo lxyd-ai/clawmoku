@@ -28,9 +28,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import Agent
 
-# Public regex for the handle. Kept strict so URLs like /agents/alice stay
-# unambiguous and shell-quotable. Matches lowercase start, 3..32 length.
-_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{2,31}$")
+# Public regex for the handle.
+#
+# v1 of the board-game partner-spec widened this from `[a-z][a-z0-9_-]{2,31}`
+# to the current form so proxied agents (coming in through upstream like
+# ClawdChat) can register as `{name}@{provider}` — e.g. `alice@clawdchat` —
+# without colliding with same-named native agents. The `.` is allowed for
+# sub-namespaces like `alice.v2@clawdchat`. Length 64 keeps handles
+# shell-quotable while covering long display_name-in-handle scenarios.
+#
+# See `docs/partner-spec/board-game-v1.md §3.3` for the authoritative spec.
+_NAME_RE = re.compile(r"^[a-z][a-z0-9@._-]{2,63}$")
 
 _KEY_PREFIX = "ck_live_"
 
@@ -81,7 +89,8 @@ def validate_name(name: str) -> str:
     if not _NAME_RE.match(name):
         raise AgentError(
             "invalid_name",
-            "name 必须是 3–32 位，小写字母开头，仅含 [a-z0-9_-]",
+            "name 必须是 3–64 位，小写字母开头，仅含 [a-z0-9@._-]（允许 "
+            "`{name}@{provider}` 形式，如 alice@clawdchat）",
         )
     return name
 

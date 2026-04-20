@@ -568,13 +568,90 @@ async def list_matches(
     status: str | None = None,
     limit: int = 50,
     sort: str = "newest",
+    agent_name: str | None = None,
 ) -> list[Match]:
     order = Match.created_at.asc() if sort == "oldest" else Match.created_at.desc()
     stmt = select(Match).order_by(order).limit(limit)
     if status:
         stmt = stmt.where(Match.status == status)
+    if agent_name:
+        # Join to match_players to filter by handle. Upstream proxies (spec
+        # §8 checklist) use `?agent=<handle>&status=in_progress` to locate
+        # stale rooms for a given proxied agent during reaper sweeps.
+        stmt = stmt.join(MatchPlayer, MatchPlayer.match_id == Match.id).where(
+            MatchPlayer.name == agent_name.strip().lower()
+        ).distinct()
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+# ── resign (in_progress only) ──────────────────────────────────────
+
+
+async def resign_match(
+    session: AsyncSession,
+    match_id: str,
+    *,
+    play_token: str | None = None,
+    agent: Agent | None = None,
+) -> Match:
+    """
+    One of the players concedes the game. Judged an immediate win for the
+    other seat, with `result.reason == "resigned"`.
+
+    Caller identity resolution is the same as `/action`: bearer-auth by
+    `agent`, or seat-scoped `play_token`. Either way we resolve down to a
+    concrete `seat`; anything else is a 401.
+    """
+    match = await session.get(Match, match_id)
+    if not match:
+        raise NotFound("match_not_found", "对局不存在")
+    if match.status == "finished":
+        raise Conflict("match_finished", "对局已结束")
+    if match.status == "aborted":
+        raise Conflict("match_aborted", "对局已被取消")
+    if match.status != "in_progress":
+        raise Conflict("match_not_in_progress", "对局未进行中，无法认输")
+
+    caller_seat: int | None = None
+    if agent is not None:
+        p = next((p for p in match.players if p.agent_id == agent.id), None)
+        if p is not None:
+            caller_seat = p.seat
+    if caller_seat is None and play_token:
+        h = _hash_token(play_token)
+        p = next((p for p in match.players if p.play_token_hash == h), None)
+        if p is not None:
+            caller_seat = p.seat
+    if caller_seat is None:
+        raise Unauthorized("agent_not_in_match", "认输者不是本局的玩家")
+
+    winner_seat = 1 - caller_seat
+    match.status = "finished"
+    match.finished_at = datetime.now(timezone.utc)
+    match.result = {
+        "winner_seat": winner_seat,
+        "loser_seat": caller_seat,
+        "reason": "resigned",
+        "summary": f"{'黑方' if caller_seat == 0 else '白方'}认输",
+        "replay_url": f"{get_settings().public_base_url.rstrip('/')}/match/{match.id}",
+    }
+    # Cancel any pending turn timer — resign overrides timeouts.
+    timer.cancel(match_id)
+    await _record_stats(session, match, match.result)
+    await _append_event(
+        session,
+        match,
+        "match_finished",
+        {
+            "winner_seat": winner_seat,
+            "reason": "resigned",
+            "summary": match.result["summary"],
+        },
+    )
+    await session.commit()
+    event_bus.notify(match.id)
+    return match
 
 
 async def get_events(

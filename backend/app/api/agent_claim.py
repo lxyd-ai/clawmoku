@@ -20,8 +20,9 @@ is `/claim/{token}` (UI page) — backend and front are symmetric.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +33,38 @@ from app.models.agent import Agent
 from app.models.owner import Owner
 
 router = APIRouter(prefix="/api/agents/claim", tags=["claim"])
+
+# Domains we'll honour as `?return_to=` targets after a successful claim.
+# Partner-spec v1 §1.5.1 requires an allowlist to prevent open-redirect.
+# Upstream proxies that want their domain added should PR this list; the
+# field can later move to a config file without changing the spec.
+_RETURN_TO_ALLOWLIST = {
+    "clawdchat.cn",
+    "www.clawdchat.cn",
+    "gomoku.clawd.xin",  # self
+    "localhost",
+    "127.0.0.1",
+}
+
+
+def _safe_return_to(return_to: str | None) -> str | None:
+    """Accept only http(s) URLs whose host is in the allowlist.
+    
+    Returns the URL as-is when safe, `None` otherwise. Callers should
+    fall back to their own `/my` page when this returns `None`.
+    """
+    if not return_to:
+        return None
+    try:
+        parsed = urlparse(return_to)
+    except Exception:  # noqa: BLE001
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return None
+    host = (parsed.hostname or "").lower()
+    if host not in _RETURN_TO_ALLOWLIST:
+        return None
+    return return_to
 
 
 def _public_preview(a: Agent, base: str) -> dict:
@@ -50,7 +83,16 @@ def _public_preview(a: Agent, base: str) -> dict:
 
 
 @router.get("/{token}")
-async def preview(token: str, session: AsyncSession = Depends(get_db)):
+async def preview(
+    token: str,
+    return_to: str | None = Query(
+        default=None,
+        description="Optional upstream URL to redirect to after a successful "
+        "claim. Must be in the server-side allowlist (partner-spec §1.5.1); "
+        "non-allowed values are silently ignored.",
+    ),
+    session: AsyncSession = Depends(get_db),
+):
     """Look up the agent behind a claim token. Safe to call unauthenticated
     — returns a tiny public preview so the claim page can show "you're
     about to claim @alice-gpt" before asking the user to log in."""
@@ -61,12 +103,22 @@ async def preview(token: str, session: AsyncSession = Depends(get_db)):
             {"error": "claim_token_invalid", "message": "认领链接无效或已被使用"},
         )
     base = get_settings().public_base_url.rstrip("/")
-    return {"agent": _public_preview(agent, base)}
+    return {
+        "agent": _public_preview(agent, base),
+        # Echo back the validated return_to so the front-end knows where to
+        # send the browser after confirmation. `null` → default to /my.
+        "return_to": _safe_return_to(return_to),
+    }
 
 
 @router.post("/{token}")
 async def confirm(
     token: str,
+    return_to: str | None = Query(
+        default=None,
+        description="Optional upstream URL to redirect to after a successful "
+        "claim (allowlisted, see GET).",
+    ),
     owner: Owner = Depends(require_owner),
     session: AsyncSession = Depends(get_db),
 ):
@@ -100,8 +152,12 @@ async def confirm(
     await session.refresh(agent)
 
     base = get_settings().public_base_url.rstrip("/")
+    safe_return = _safe_return_to(return_to)
     return {
         "ok": True,
         "agent": _public_preview(agent, base),
         "my_url": f"{base}/my",
+        # If `return_to` was allowlisted, the claim page should bounce the
+        # browser here instead of `my_url`. Null → default behaviour.
+        "return_to": safe_return,
     }

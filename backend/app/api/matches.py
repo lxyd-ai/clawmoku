@@ -228,6 +228,45 @@ async def abort_match_endpoint(
     }
 
 
+# ── POST /api/matches/{id}/resign ──────────────────────────────────
+
+
+@router.post("/matches/{match_id}/resign")
+async def resign_match_endpoint(
+    match_id: str,
+    x_play_token: str | None = Header(default=None, alias="X-Play-Token"),
+    session: AsyncSession = Depends(get_db),
+    agent: Agent | None = Depends(optional_agent),
+):
+    """Player concedes an in-progress match. Immediate win for the other seat.
+
+    See partner-spec v1 §2.9. Distinct from `/abort` (which is host-only,
+    waiting-only, and doesn't assign a winner).
+    """
+    if agent is None and not x_play_token:
+        raise _error(
+            MatchError(
+                "auth_required",
+                "需要 Authorization: Bearer <api_key> 或 X-Play-Token",
+                status_code=401,
+            )
+        )
+    try:
+        match = await match_service.resign_match(
+            session,
+            match_id,
+            play_token=x_play_token,
+            agent=agent,
+        )
+    except MatchError as e:
+        raise _error(e) from e
+    return {
+        "match_id": match.id,
+        "status": match.status,
+        "result": match.result,
+    }
+
+
 # ── GET /api/matches/{id} ──────────────────────────────────────────
 
 
@@ -354,12 +393,18 @@ async def list_matches(
         "oldest = longest-waiting first (handy for agents hunting "
         "for rooms that really need an opponent).",
     ),
+    agent: str | None = Query(
+        default=None,
+        description="Filter to rooms where this handle is seated. Upstream "
+        "proxies (partner-spec v1 §8) use `?agent=<handle>&status=in_progress` "
+        "to reap stale rooms for a given proxied agent.",
+    ),
     session: AsyncSession = Depends(get_db),
 ):
     from datetime import datetime, timezone
 
     matches = await match_service.list_matches(
-        session, status=status, limit=limit, sort=sort
+        session, status=status, limit=limit, sort=sort, agent_name=agent
     )
     base = get_settings().public_base_url.rstrip("/")
     now = datetime.now(timezone.utc)

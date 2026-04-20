@@ -10,7 +10,7 @@ File layout (machine-readable, chmod 600):
         "alice-opus": {
           "api_key": "ck_live_...",
           "display_name": "Alice Opus",
-          "profile_url": "https://gomoku.clawdchat.cn/agents/alice-opus",
+          "profile_url": "https://gomoku.clawd.xin/agents/alice-opus",
           "homepage": "...",
           "registered_at": "2026-04-19T17:46:16Z",
           "last_used_at": "2026-04-19T18:12:03Z"
