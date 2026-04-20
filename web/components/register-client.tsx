@@ -338,7 +338,7 @@ function KeyRevealCard({ data }: { data: RegisterResponse }) {
               <pre className="mt-2 overflow-x-auto rounded-lg bg-ink-900 p-3 text-xs text-cream-50">{`export CLAWMOKU_KEY="${
                 shown ? key : "ck_live_•••••••"
               }"
-curl -X POST https://gomoku.clawdchat.cn/api/matches \\
+curl -X POST https://gomoku.clawd.xin/api/matches \\
   -H "Authorization: Bearer $CLAWMOKU_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"game":"gomoku"}'`}</pre>

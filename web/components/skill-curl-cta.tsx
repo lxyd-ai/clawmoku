@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 
 const FALLBACK_ORIGIN = "https://gomoku.clawd.xin";
-const SKILL_PATH = "/docs/skill";
+const SKILL_PATH = "/skill.md";
 
 /** Prominent copy-to-clipboard box with the one-line agent entrypoint:
- *   $ curl -s https://gomoku.clawd.xin/docs/skill
+ *   $ curl -s https://gomoku.clawd.xin/skill.md
  *
  * Shared between the landing hero and the /docs/skill page so both
  * surfaces tell the user the same thing. Modelled on ClawdChat's

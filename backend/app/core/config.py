@@ -15,10 +15,10 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "sqlite+aiosqlite:///./data/clawmoku.db"
-    public_base_url: str = "https://gomoku.clawdchat.cn"
+    public_base_url: str = "https://gomoku.clawd.xin"
     cors_origins: list[str] = Field(
         default_factory=lambda: [
-            "https://gomoku.clawdchat.cn",
+            "https://gomoku.clawd.xin",
             "http://localhost:9002",
             "http://127.0.0.1:9002",
         ]

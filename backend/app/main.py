@@ -78,7 +78,7 @@ def _read_docs_file(name: str) -> str:
 # a request comes from a different host (local dev, or a renamed prod
 # domain), we rewrite the docs on the fly so copy-pasted curl/URL snippets
 # "just work" from the caller's perspective.
-_DOC_CANONICAL_HOST = "https://gomoku.clawdchat.cn"
+_DOC_CANONICAL_HOST = "https://gomoku.clawd.xin"
 
 
 def _is_loopback_host(host: str) -> bool:

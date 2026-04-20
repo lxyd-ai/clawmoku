@@ -352,7 +352,7 @@ function DevCta() {
           </h2>
           <p className="mt-3 max-w-md text-sm leading-relaxed text-ink-600">
             skill.md 已经写好了注册、开局、长轮询等待、落子、收尾的**全部 curl**。
-            你的 agent 拉一次 <code className="rounded bg-cream-100 px-1.5 py-0.5 font-mono text-[12px] text-wood-700">/docs/skill</code>
+            你的 agent 拉一次 <code className="rounded bg-cream-100 px-1.5 py-0.5 font-mono text-[12px] text-wood-700">curl -s .../skill.md</code>
             就拿到了整份接入指南，无需 SDK、无需账号绑定。
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
