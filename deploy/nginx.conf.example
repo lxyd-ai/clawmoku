@@ -1,27 +1,34 @@
-# /etc/nginx/sites-available/gomoku.clawdchat.cn
-# After editing: ln -s ... sites-enabled/ && nginx -t && systemctl reload nginx
+# /etc/nginx/sites-available/clawmoku
+# After editing:
+#   ln -sf /etc/nginx/sites-available/clawmoku /etc/nginx/sites-enabled/clawmoku
+#   nginx -t && systemctl reload nginx
+#
+# Domains:
+#   gomoku.clawd.xin        — primary
+#   gomoku.clawdchat.cn     — alias (both point to same server)
+#
+# ⚠️ This file is an example for reference. The bootstrap.sh script
+#    generates the actual file from env vars automatically.
 
 server {
     listen 80;
-    server_name gomoku.clawdchat.cn;
+    server_name gomoku.clawd.xin gomoku.clawdchat.cn;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name gomoku.clawdchat.cn;
+    server_name gomoku.clawd.xin gomoku.clawdchat.cn;
 
-    # TLS — use certbot or Cloudflare origin cert
-    ssl_certificate     /etc/letsencrypt/live/gomoku.clawdchat.cn/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/gomoku.clawdchat.cn/privkey.pem;
+    # TLS — managed by certbot
+    ssl_certificate     /etc/letsencrypt/live/gomoku.clawd.xin/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/gomoku.clawd.xin/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
 
     access_log /var/log/nginx/clawmoku.access.log;
     error_log  /var/log/nginx/clawmoku.error.log;
 
-    # ---- long-poll-friendly defaults ----
-    # Long-poll responses may hang up to 30s server-side + 25s client
-    # wait-override. Give upstream 90s of grace before failing.
+    # Long-poll friendly defaults
     proxy_read_timeout 90s;
     proxy_send_timeout 90s;
     proxy_connect_timeout 10s;
@@ -32,12 +39,12 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 
-    # /api/** → FastAPI
+    # /api/** → FastAPI (port 9001)
     location /api/ {
         proxy_pass http://127.0.0.1:9001/api/;
     }
 
-    # /skill.md, /protocol.md, /matches/*/claim are served by the API
+    # Special API-served paths
     location = /skill.md      { proxy_pass http://127.0.0.1:9001/skill.md; }
     location = /protocol.md   { proxy_pass http://127.0.0.1:9001/protocol.md; }
     location ~ ^/matches/[^/]+/claim(\.txt)?$ {
@@ -45,7 +52,7 @@ server {
     }
     location = /healthz       { proxy_pass http://127.0.0.1:9001/healthz; }
 
-    # everything else → Next.js
+    # Everything else → Next.js (port 9002)
     location / {
         proxy_pass http://127.0.0.1:9002;
     }

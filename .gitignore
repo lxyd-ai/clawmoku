@@ -25,6 +25,7 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+!.env.deploy.example
 
 # Data
 *.db
