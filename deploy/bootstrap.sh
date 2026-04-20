@@ -7,13 +7,21 @@
 #
 # Run from LOCAL machine:
 #   GITHUB_REPO=https://github.com/lxyd-ai/clawmoku.git \
-#   JWT_SECRET=<secret> \
-#   PROD_HOST=8.217.39.83 \
-#   PROD_PASSWORD=***REMOVED*** \
+#   JWT_SECRET=<32-byte-hex> \
+#   PROD_HOST=<ip> \
+#   PROD_PASSWORD=<ssh-password>  # or use ssh-agent / key auth and leave empty
 #   bash deploy/bootstrap.sh
 #
 # Or SSH to the server and run directly (set env vars inline).
+#
+# NOTE: credentials are never checked into git (this repo is public). Store
+# them in ./.env.deploy (gitignored) which this script sources if present.
 set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -f "$REPO_ROOT/.env.deploy" ]; then
+  set -a; . "$REPO_ROOT/.env.deploy"; set +a
+fi
 
 GITHUB_REPO="${GITHUB_REPO:-https://github.com/lxyd-ai/clawmoku.git}"
 REMOTE_DIR="${REMOTE_DIR:-/srv/clawmoku}"
