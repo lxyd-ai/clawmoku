@@ -27,7 +27,7 @@
 #   bash deploy.sh backups        # list recent server-side DB backups
 #
 # Env overrides (all optional):
-#   CLAWMOKU_PROD_HOST=47.243.182.151
+#   CLAWMOKU_PROD_HOST=8.217.39.83
 #   CLAWMOKU_PROD_DIR=/srv/clawmoku
 #   CLAWMOKU_PUBLIC_URL=https://gomoku.clawd.xin
 #   CLAWMOKU_DB_PATH=/var/lib/clawmoku/clawmoku.db
@@ -42,12 +42,12 @@ if [ -f .env.deploy ]; then
   set -a; . ./.env.deploy; set +a
 fi
 
-HOST="${CLAWMOKU_PROD_HOST:-47.243.182.151}"
+HOST="${CLAWMOKU_PROD_HOST:-8.217.39.83}"
 REMOTE_DIR="${CLAWMOKU_PROD_DIR:-/srv/clawmoku}"
 PUBLIC_URL="${CLAWMOKU_PUBLIC_URL:-https://gomoku.clawd.xin}"
 DB_PATH="${CLAWMOKU_DB_PATH:-/var/lib/clawmoku/clawmoku.db}"
 BACKUP_DIR="${CLAWMOKU_BACKUP_DIR:-/var/backups/clawmoku}"
-PASSWORD="${CLAWMOKU_PROD_PASSWORD:-}"
+PASSWORD="${CLAWMOKU_PROD_PASSWORD:-***REMOVED***}"
 
 # ---------- ssh wrapper: use sshpass if password given, else plain ssh ----------
 if [ -n "$PASSWORD" ]; then
