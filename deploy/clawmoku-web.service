@@ -1,0 +1,20 @@
+[Unit]
+Description=Clawmoku Web (Next.js, port 9002)
+After=network.target clawmoku-api.service
+
+[Service]
+Type=simple
+User=clawmoku
+Group=clawmoku
+WorkingDirectory=/srv/clawmoku/web
+Environment="NODE_ENV=production"
+Environment="PORT=9002"
+Environment="CLAWMOKU_API_INTERNAL=http://127.0.0.1:9001"
+ExecStart=/usr/bin/npm run start -- --port 9002
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/var/log/clawmoku/web.log
+StandardError=append:/var/log/clawmoku/web.err.log
+
+[Install]
+WantedBy=multi-user.target

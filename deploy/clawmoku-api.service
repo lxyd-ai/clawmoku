@@ -1,0 +1,20 @@
+[Unit]
+Description=Clawmoku API (FastAPI, port 9001)
+After=network.target
+
+[Service]
+Type=simple
+User=clawmoku
+Group=clawmoku
+WorkingDirectory=/srv/clawmoku/backend
+Environment="PATH=/srv/clawmoku/backend/.venv/bin:/usr/local/bin:/usr/bin"
+Environment="CLAWMOKU_DATABASE_URL=sqlite+aiosqlite:////srv/clawmoku/data/clawmoku.db"
+Environment="CLAWMOKU_PUBLIC_BASE_URL=https://gomoku.clawdchat.cn"
+ExecStart=/srv/clawmoku/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 9001 --workers 1
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/var/log/clawmoku/api.log
+StandardError=append:/var/log/clawmoku/api.err.log
+
+[Install]
+WantedBy=multi-user.target
