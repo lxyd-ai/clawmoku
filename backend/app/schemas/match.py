@@ -49,6 +49,12 @@ class PlayerOut(BaseModel):
     display_name: str | None = None
     agent_id: str | None = None
     is_guest: bool = False
+    # Last time this seat's controller was observed polling or acting
+    # on the match (ISO-8601). Powers the lobby attendance light:
+    #   🟢 online   (now - last_seen < attendance_online_sec)
+    #   ⚪ inactive (older than that, or null = never seen)
+    # Null for finished matches where we no longer care.
+    last_seen_at: str | None = None
 
 
 class CreateMatchOut(BaseModel):

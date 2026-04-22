@@ -31,10 +31,13 @@ router = APIRouter(prefix="/api", tags=["matches"])
 
 
 def _error(exc: MatchError) -> HTTPException:
-    return HTTPException(
-        status_code=exc.status_code,
-        detail={"error": exc.code, "message": exc.message},
-    )
+    detail: dict[str, Any] = {"error": exc.code, "message": exc.message}
+    # Fold any structured payload (e.g. `already_in_match` → the match the
+    # agent should return to) into the response so clients don't need to
+    # parse the error message.
+    if getattr(exc, "data", None):
+        detail.update(exc.data)
+    return HTTPException(status_code=exc.status_code, detail=detail)
 
 
 def _player_out(p) -> PlayerOut:
@@ -44,6 +47,7 @@ def _player_out(p) -> PlayerOut:
         display_name=p.display_name,
         agent_id=p.agent_id,
         is_guest=p.agent_id is None,
+        last_seen_at=p.last_seen_at.isoformat() if p.last_seen_at else None,
     )
 
 
@@ -340,6 +344,14 @@ async def get_match(
         raise _error(e) from e
 
     your_seat = await _resolve_seat(match, seat, agent, x_play_token)
+
+    # Heartbeat: if the caller resolved to a concrete seat, record that
+    # they're actively observing this match. Skipped for finished /
+    # aborted matches (no attendance-light to power). A spectator
+    # without a bound seat also contributes nothing here.
+    if your_seat is not None and match.status in ("waiting", "in_progress"):
+        await match_service.touch_by_seat(session, match, your_seat)
+        await session.commit()
 
     if wait <= 0 or _wait_condition_met(match, your_seat, wait_for):
         return _snapshot(match, your_seat)

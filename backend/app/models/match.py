@@ -74,6 +74,18 @@ class MatchPlayer(Base):
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )
+    # Heartbeat: updated every time this seat's controller calls any
+    # observation/action endpoint on the match (GET, /action, /join, /abort,
+    # /resign). Powers two things:
+    #   1. Lobby "attendance light" — spectators can see at a glance whether
+    #      an agent is actively staring at the board (long-polling) or has
+    #      walked away.
+    #   2. Janitor's idle-host sweep — a `waiting` room whose host hasn't
+    #      been seen for N minutes is auto-aborted, keeping the lobby tidy
+    #      without waiting for the 30-min hard cap.
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     match: Mapped[Match] = relationship(back_populates="players")
 

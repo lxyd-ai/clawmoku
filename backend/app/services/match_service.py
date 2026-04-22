@@ -32,9 +32,19 @@ log = logging.getLogger("clawmoku.match")
 class MatchError(Exception):
     status_code: int = 400
 
-    def __init__(self, code: str, message: str, status_code: int | None = None):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int | None = None,
+        data: dict[str, Any] | None = None,
+    ):
         self.code = code
         self.message = message
+        # Optional structured payload folded into the HTTP response body.
+        # Used e.g. by `already_in_match` to hand the agent the match it
+        # should go back to instead of opening a duplicate room.
+        self.data: dict[str, Any] = data or {}
         if status_code is not None:
             self.status_code = status_code
         super().__init__(message)
@@ -70,6 +80,65 @@ def _deadline_ts(turn_timeout: int) -> int:
 def _turn_timeout(match: Match) -> int:
     cfg = match.config or {}
     return int(cfg.get("turn_timeout") or get_settings().default_turn_timeout)
+
+
+async def touch_last_seen(
+    session: AsyncSession, player: MatchPlayer | None
+) -> None:
+    """Bump a seat's heartbeat. Safe to call with `None` (no-op) so callers
+    don't need to branch on "did I resolve a seat?"."""
+    if player is None:
+        return
+    player.last_seen_at = datetime.now(timezone.utc)
+
+
+async def touch_by_seat(
+    session: AsyncSession, match: Match, seat: int | None
+) -> None:
+    if seat is None:
+        return
+    player = next((p for p in match.players if p.seat == seat), None)
+    await touch_last_seen(session, player)
+
+
+async def active_match_for_agent(
+    session: AsyncSession,
+    agent_id: str,
+    *,
+    exclude_match_id: str | None = None,
+) -> Match | None:
+    """Return the single `waiting` / `in_progress` match this agent is
+    currently seated at, or None. Policy: an agent occupies at most one
+    live board at a time — the LLM's attention is serial, and a
+    forgotten room in another session just leads to a silent timeout
+    loss."""
+    stmt = (
+        select(Match)
+        .join(MatchPlayer, MatchPlayer.match_id == Match.id)
+        .where(
+            MatchPlayer.agent_id == agent_id,
+            Match.status.in_(("waiting", "in_progress")),
+        )
+        .order_by(Match.created_at.desc())
+        .limit(1)
+    )
+    if exclude_match_id:
+        stmt = stmt.where(Match.id != exclude_match_id)
+    res = await session.execute(stmt)
+    return res.scalars().first()
+
+
+def _already_in_match_error(match: Match) -> Conflict:
+    base = get_settings().public_base_url.rstrip("/")
+    return Conflict(
+        "already_in_match",
+        "你已有一局未结束的对局，先把那局下完或取消，再开新的。",
+        data={
+            "match_id": match.id,
+            "status": match.status,
+            "invite_url": f"{base}/match/{match.id}",
+        },
+    )
 
 
 async def _append_event(
@@ -184,6 +253,14 @@ async def create_match(
     if game != "gomoku":
         raise MatchError("unsupported_game", f"不支持的 game: {game}", status_code=400)
 
+    # One-board-per-agent rule. We check up-front so the agent learns about
+    # its abandoned room before we allocate a new one. Guest matches (no
+    # agent binding) are out of scope — the token is their only identity.
+    if agent is not None:
+        existing = await active_match_for_agent(session, agent.id)
+        if existing is not None:
+            raise _already_in_match_error(existing)
+
     board_size = int(config.get("board_size", 15)) if config else 15
     turn_timeout = int(
         (config or {}).get("turn_timeout") or get_settings().default_turn_timeout
@@ -212,6 +289,7 @@ async def create_match(
         agent_id = None
 
     play_token = "pk_" + secrets.token_urlsafe(24)
+    now = datetime.now(timezone.utc)
     player = MatchPlayer(
         match_id=match.id,
         seat=0,
@@ -220,6 +298,7 @@ async def create_match(
         play_token_hash=_hash_token(play_token),
         agent_id=agent_id,
         meta=player_meta or {},
+        last_seen_at=now,
     )
     session.add(player)
     await _append_event(
@@ -274,8 +353,19 @@ async def join_match(
     if agent_id and any(p.agent_id == agent_id for p in match.players):
         raise Conflict("duplicate_agent", "你已经坐在这一局里了")
 
+    # One-board-per-agent: if this agent is already tied up on a
+    # different match, refuse — don't quietly add them to a second board
+    # they can't actually pay attention to.
+    if agent_id:
+        existing = await active_match_for_agent(
+            session, agent_id, exclude_match_id=match.id
+        )
+        if existing is not None:
+            raise _already_in_match_error(existing)
+
     seat = 1
     play_token = "pk_" + secrets.token_urlsafe(24)
+    now = datetime.now(timezone.utc)
     player = MatchPlayer(
         match_id=match.id,
         seat=seat,
@@ -284,8 +374,13 @@ async def join_match(
         play_token_hash=_hash_token(play_token),
         agent_id=agent_id,
         meta=player_meta or {},
+        last_seen_at=now,
     )
     session.add(player)
+    # Seat-0 host gets credit for "still paying attention" by virtue of
+    # having opened the door at all — bump their heartbeat too.
+    host = next((p for p in match.players if p.seat == 0), None)
+    await touch_last_seen(session, host)
     await _append_event(
         session,
         match,
@@ -410,6 +505,8 @@ async def submit_action(
 
     new_state = outcome["state"]
     timer.cancel(match.id)
+    # Any successful action is a strong "I'm here" signal.
+    await touch_last_seen(session, player)
 
     event_data: dict[str, Any] = {
         "seat": player.seat,

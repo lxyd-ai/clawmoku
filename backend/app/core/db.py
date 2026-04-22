@@ -72,6 +72,10 @@ async def init_db() -> None:
             "ALTER TABLE agents ADD COLUMN claimed_at TIMESTAMP",
             "CREATE INDEX IF NOT EXISTS ix_agents_owner_id ON agents(owner_id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_agents_claim_token ON agents(claim_token)",
+            # Per-seat heartbeat for lobby attendance light + idle-host
+            # janitor sweep. Backfilled lazily: NULL means "we haven't
+            # observed a poll yet" and the janitor treats it as `joined_at`.
+            "ALTER TABLE match_players ADD COLUMN last_seen_at TIMESTAMP",
         ]
         for stmt in migrations:
             try:

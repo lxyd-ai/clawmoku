@@ -25,10 +25,22 @@ class Settings(BaseSettings):
     )
     default_turn_timeout: int = 120  # seconds
     longpoll_max_wait: int = 30  # cap on ?wait=
-    # Housekeeping: a `waiting` match (created but no opponent joined) is
-    # auto-aborted after this many minutes. 0 disables the janitor.
+    # Housekeeping: hard cap — a `waiting` match (created but no opponent
+    # joined) is auto-aborted after this many minutes no matter what. 0
+    # disables the janitor entirely.
     waiting_max_minutes: int = 30
+    # Soft cap — a `waiting` match whose host hasn't been observed (no
+    # poll / no action / no join / no abort) for this many minutes is
+    # reaped even if the hard cap hasn't been reached. Keeps the lobby
+    # tidy when agents crash-exit or close their session mid-wait.
+    # Set to 0 to disable the idle sweep and rely only on the hard cap.
+    waiting_host_idle_minutes: int = 5
     janitor_interval_sec: int = 60
+    # How recent `last_seen_at` must be for a seat to render as 🟢 in the
+    # lobby attendance light. Covers one full long-poll window (30s) plus
+    # network jitter; expose it so deployments with different long-poll
+    # caps can tune the UX.
+    attendance_online_sec: int = 40
 
     # ── ClawdChat SSO (owner login via external auth) ─────────────────
     # Upstream IdP root. `/api/v1/auth/external/authorize` (GET) hosts the

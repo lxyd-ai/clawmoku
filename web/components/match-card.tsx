@@ -13,6 +13,13 @@ export type MatchItem = {
     display_name?: string | null;
     agent_id?: string | null;
     is_guest?: boolean;
+    /**
+     * ISO timestamp of the last observed poll / action from this seat.
+     * Used to render the lobby "attendance light" — if the controller
+     * stops long-polling, the lobby should show the seat as inactive so
+     * spectators know there's nobody home.
+     */
+    last_seen_at?: string | null;
   }[];
   current_seat: number | null;
   created_at: string;
@@ -20,6 +27,23 @@ export type MatchItem = {
   waited_sec?: number;
   invite_url?: string;
 };
+
+/**
+ * How fresh `last_seen_at` needs to be for a seat to read as "online".
+ * Covers one 30s long-poll window plus a bit of network jitter. Keep in
+ * sync with `Settings.attendance_online_sec` on the backend if you
+ * change it.
+ */
+const ATTENDANCE_ONLINE_MS = 40_000;
+
+type Attendance = "online" | "idle" | "unknown";
+
+function attendance(lastSeen: string | null | undefined): Attendance {
+  if (!lastSeen) return "unknown";
+  const t = new Date(lastSeen).getTime();
+  if (isNaN(t)) return "unknown";
+  return Date.now() - t < ATTENDANCE_ONLINE_MS ? "online" : "idle";
+}
 
 type Props = {
   match: MatchItem;
@@ -77,6 +101,7 @@ export function MatchCard({ match, compact }: Props) {
   const white = match.players.find((p) => p.seat === 1);
   const isWaiting = match.status === "waiting";
   const isLive = match.status === "in_progress";
+  const isFinished = !isWaiting && !isLive;
   const statusLabel = isWaiting
     ? "等待对手"
     : isLive
@@ -125,11 +150,13 @@ export function MatchCard({ match, compact }: Props) {
           side="black"
           player={black}
           isTurn={isLive && match.current_seat === 0}
+          showAttendance={!isFinished}
         />
         <PlayerRow
           side="white"
           player={white}
           isTurn={isLive && match.current_seat === 1}
+          showAttendance={!isFinished}
         />
       </div>
 
@@ -152,10 +179,12 @@ function PlayerRow({
   side,
   player,
   isTurn,
+  showAttendance,
 }: {
   side: "black" | "white";
   player: MatchItem["players"][number] | undefined;
   isTurn: boolean;
+  showAttendance: boolean;
 }) {
   const display = player?.display_name || player?.name || "等待中…";
   const color = player ? avatarColor(display) : "#d6d3d1";
@@ -166,6 +195,7 @@ function PlayerRow({
     ) : (
       <span className="stone-w" aria-hidden />
     );
+  const status = player ? attendance(player.last_seen_at) : "unknown";
   return (
     <div
       className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${
@@ -174,11 +204,16 @@ function PlayerRow({
           : "border-cream-100 bg-cream-50"
       }`}
     >
-      <div
-        className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white"
-        style={{ background: player ? color : "#a8a29e" }}
-      >
-        {player ? initials(display) : "?"}
+      <div className="relative">
+        <div
+          className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white"
+          style={{ background: player ? color : "#a8a29e" }}
+        >
+          {player ? initials(display) : "?"}
+        </div>
+        {player && showAttendance && (
+          <AttendanceDot status={status} isTurn={isTurn} />
+        )}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 text-sm font-medium text-ink-800">
@@ -202,7 +237,10 @@ function PlayerRow({
           )}
         </div>
         <div className="text-[11px] text-ink-500">
-          {side === "black" ? "执黑先行" : "执白"}
+          <span>{side === "black" ? "执黑先行" : "执白"}</span>
+          {player && showAttendance && (
+            <AttendanceLabel status={status} isTurn={isTurn} />
+          )}
         </div>
       </div>
       {isTurn && (
@@ -212,4 +250,62 @@ function PlayerRow({
       )}
     </div>
   );
+}
+
+/**
+ * Small colored dot overlaid on the avatar. Green = agent is actively
+ * long-polling the match; gray = hasn't called the API for a while;
+ * yellow pulse = it's this agent's turn AND they're still online
+ * (typical "thinking" state) — the dot joins the `on move` chip in
+ * reassuring the spectator that somebody is, in fact, home.
+ */
+function AttendanceDot({
+  status,
+  isTurn,
+}: {
+  status: Attendance;
+  isTurn: boolean;
+}) {
+  if (status === "unknown") return null;
+  const color =
+    status === "online"
+      ? isTurn
+        ? "#f59e0b" // amber — online & thinking
+        : "#10b981" // emerald — online & idle
+      : "#9ca3af"; // gray — gone
+  const title =
+    status === "online"
+      ? isTurn
+        ? "在线 · 思考中"
+        : "在线 · 正在盯盘"
+      : "离线 · 超过 40 秒未响应";
+  return (
+    <span
+      title={title}
+      aria-label={title}
+      className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-white ${
+        status === "online" && isTurn ? "animate-pulse" : ""
+      }`}
+      style={{ background: color }}
+    />
+  );
+}
+
+function AttendanceLabel({
+  status,
+  isTurn,
+}: {
+  status: Attendance;
+  isTurn: boolean;
+}) {
+  if (status === "unknown") return null;
+  const label =
+    status === "online" ? (isTurn ? "思考中" : "在线") : "离线";
+  const color =
+    status === "online"
+      ? isTurn
+        ? "text-amber-600"
+        : "text-emerald-600"
+      : "text-ink-500";
+  return <span className={`ml-1.5 ${color}`}>· {label}</span>;
 }

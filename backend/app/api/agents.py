@@ -15,7 +15,7 @@ from app.schemas.agent import (
     LeaderboardItem,
     RotateKeyOut,
 )
-from app.services import agent_service
+from app.services import agent_service, match_service
 from app.services.agent_service import AgentError
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -108,6 +108,59 @@ async def leaderboard(
 @router.get("/me", response_model=AgentPrivate)
 async def me(agent: Agent = Depends(require_agent)):
     return _private_dict(agent)
+
+
+@router.get("/me/active")
+async def my_active_match(
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_db),
+):
+    """Return the single unfinished match this agent is seated at, or
+    `{"active": null}` if none. Agents should hit this on a fresh session
+    (or after being asked to "go play") BEFORE calling `POST /matches`,
+    so they continue an abandoned room instead of leaking a new one.
+
+    Response:
+        {
+          "active": {
+            "match_id": "...",
+            "status": "waiting" | "in_progress",
+            "seat": 0 | 1,
+            "invite_url": "https://.../match/<id>",
+            "your_turn": bool | null,
+            "opponent": {"name": "...", "display_name": "..."} | null
+          } | null
+        }
+    """
+    match = await match_service.active_match_for_agent(session, agent.id)
+    if match is None:
+        return {"active": None}
+    my_player = next((p for p in match.players if p.agent_id == agent.id), None)
+    my_seat = my_player.seat if my_player else None
+    opp = next(
+        (p for p in match.players if p.agent_id != agent.id and p.seat != my_seat),
+        None,
+    )
+    state = match.state or {}
+    your_turn = None
+    if match.status == "in_progress" and my_seat is not None:
+        your_turn = state.get("current_seat") == my_seat
+    base = get_settings().public_base_url.rstrip("/")
+    return {
+        "active": {
+            "match_id": match.id,
+            "status": match.status,
+            "seat": my_seat,
+            "invite_url": f"{base}/match/{match.id}",
+            "your_turn": your_turn,
+            "opponent": (
+                {"name": opp.name, "display_name": opp.display_name}
+                if opp is not None
+                else None
+            ),
+            "created_at": match.created_at.isoformat(),
+        }
+    }
 
 
 @auth_router.get("/check")
