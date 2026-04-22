@@ -102,14 +102,85 @@ rsync_code() {
 }
 
 remote_build() {
-  echo "==> [build] chown + pip install + npm ci + next build + restart"
-  rssh "set -e; \
-    chown -R clawmoku:clawmoku $REMOTE_DIR && \
-    sudo -u clawmoku $REMOTE_DIR/backend/.venv/bin/pip install -e $REMOTE_DIR/backend --quiet && \
-    cd $REMOTE_DIR/web && sudo -u clawmoku npm ci --silent && sudo -u clawmoku npm run build && \
-    systemctl restart clawmoku-api clawmoku-web && \
-    sleep 2 && \
-    systemctl is-active clawmoku-api clawmoku-web"
+  # Strategy: keep the running clawmoku-web process happy during the slow
+  # (~90s) `npm ci && next build` window. We used to run those in-place
+  # inside $REMOTE_DIR/web, which meant:
+  #   - npm ci blew away node_modules that the running `next start` was
+  #     loading lazily for new requests
+  #   - next build rewrote .next/ under the running process's feet
+  # Either one takes prod to 502 for ~2 minutes. Fix: build inside a
+  # side directory ($REMOTE_DIR/web.build/) that's a cheap hard-linked
+  # copy of web/, and only swap .next/ + node_modules/ into place once
+  # the new artifacts are complete. Then restart services as the
+  # absolute last step, which is the only user-visible downtime window.
+  #
+  # Implementation note: we pipe the recipe into `bash -s` via heredoc
+  # rather than stuffing it into a single-line `rssh "…"` call, because
+  # the latter silently swallowed the `npm ci / next build` step in
+  # practice (shell quoting + line-continuation interactions). Heredoc
+  # is unambiguous and trivially readable.
+  echo "==> [build] staging build → swap → restart (prod stays up during build)"
+  if [ -n "$PASSWORD" ]; then
+    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "root@$HOST" \
+      "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE_SH'
+set -euo pipefail
+: "${REMOTE_DIR:?REMOTE_DIR unset}"
+STAGE="$REMOTE_DIR/web.build"
+
+echo "  • chown code tree"
+chown -R clawmoku:clawmoku "$REMOTE_DIR"
+
+echo "  • backend: pip install -e (safe — running process restarts at end)"
+sudo -u clawmoku "$REMOTE_DIR/backend/.venv/bin/pip" install -e "$REMOTE_DIR/backend" --quiet
+
+echo "  • frontend: prepare staging at $STAGE (hard-linked copy)"
+rm -rf "$STAGE"
+sudo -u clawmoku cp -al "$REMOTE_DIR/web" "$STAGE"
+# Break hard links to prod's node_modules/.next so the rebuild below
+# can't accidentally mutate the tree the live process is serving from.
+sudo -u clawmoku rm -rf "$STAGE/node_modules" "$STAGE/.next"
+
+echo "  • frontend: npm ci + next build (prod still serving from old .next)"
+sudo -u clawmoku bash -lc "cd '$STAGE' && npm ci --silent && npm run build"
+
+echo "  • swap: atomic mv of node_modules/ and .next/ into prod web dir"
+cd "$REMOTE_DIR/web"
+[ -d node_modules ] && mv node_modules .node_modules.old
+mv "$STAGE/node_modules" ./node_modules
+[ -d .next ] && mv .next .next.old
+mv "$STAGE/.next" ./.next
+chown -R clawmoku:clawmoku node_modules .next
+rm -rf "$STAGE" .next.old .node_modules.old
+
+echo "  • restart: clawmoku-api + clawmoku-web (only downtime, ~2s)"
+systemctl restart clawmoku-api clawmoku-web
+sleep 2
+systemctl is-active clawmoku-api clawmoku-web
+REMOTE_SH
+  else
+    ssh -o StrictHostKeyChecking=no "root@$HOST" \
+      "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE_SH'
+set -euo pipefail
+: "${REMOTE_DIR:?REMOTE_DIR unset}"
+STAGE="$REMOTE_DIR/web.build"
+chown -R clawmoku:clawmoku "$REMOTE_DIR"
+sudo -u clawmoku "$REMOTE_DIR/backend/.venv/bin/pip" install -e "$REMOTE_DIR/backend" --quiet
+rm -rf "$STAGE"
+sudo -u clawmoku cp -al "$REMOTE_DIR/web" "$STAGE"
+sudo -u clawmoku rm -rf "$STAGE/node_modules" "$STAGE/.next"
+sudo -u clawmoku bash -lc "cd '$STAGE' && npm ci --silent && npm run build"
+cd "$REMOTE_DIR/web"
+[ -d node_modules ] && mv node_modules .node_modules.old
+mv "$STAGE/node_modules" ./node_modules
+[ -d .next ] && mv .next .next.old
+mv "$STAGE/.next" ./.next
+chown -R clawmoku:clawmoku node_modules .next
+rm -rf "$STAGE" .next.old .node_modules.old
+systemctl restart clawmoku-api clawmoku-web
+sleep 2
+systemctl is-active clawmoku-api clawmoku-web
+REMOTE_SH
+  fi
 }
 
 smoke() {
@@ -120,8 +191,11 @@ smoke() {
   else
     echo "    !! healthz FAILED"; fail=1
   fi
+  # `skill.md` currently starts with `# Clawmoku · …` — accept YAML front
+  # matter (`---`), HTML comments (`<!--`), or a leading markdown heading
+  # (`# `) as "this is markdown, not an HTML redirect / error page".
   if curl -fsS -o /tmp/clawmoku-skill.md "$PUBLIC_URL/docs/skill" \
-     && head -5 /tmp/clawmoku-skill.md | grep -qE '^(---|<!--)'; then
+     && head -5 /tmp/clawmoku-skill.md | grep -qE '^(---|<!--|# )'; then
     echo "    /docs/skill (curl UA) returns markdown"
   else
     echo "    !! /docs/skill did not return markdown to curl UA"; fail=1

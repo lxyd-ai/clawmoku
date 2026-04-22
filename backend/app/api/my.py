@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_owner
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.timeutils import iso_utc
 from app.models.agent import Agent
 from app.models.match import Match, MatchPlayer
 from app.models.owner import Owner
@@ -34,7 +35,7 @@ def _agent_summary(a: Agent, base: str) -> dict:
         "total_matches": (a.wins or 0) + (a.losses or 0) + (a.draws or 0),
         "profile_url": f"{base}/agents/{a.name}",
         "api_key_prefix": a.api_key_prefix,
-        "claimed_at": a.claimed_at.isoformat() if a.claimed_at else None,
+        "claimed_at": iso_utc(a.claimed_at),
     }
 
 
@@ -110,7 +111,7 @@ async def my_matches(
             {
                 "match_id": m.id,
                 "status": m.status,
-                "created_at": m.created_at.isoformat(),
+                "created_at": iso_utc(m.created_at),
                 "move_count": state.get("move_count", 0),
                 "players": players,
                 "invite_url": f"{base}/match/{m.id}",

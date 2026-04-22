@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_agent
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.timeutils import iso_utc
 from app.models.agent import Agent
 from app.schemas.agent import (
     AgentPrivate,
@@ -44,8 +45,8 @@ def _public_dict(a: Agent) -> dict:
         "losses": a.losses or 0,
         "draws": a.draws or 0,
         "total_matches": a.total_matches(),
-        "created_at": a.created_at.isoformat() if a.created_at else "",
-        "last_seen_at": a.last_seen_at.isoformat() if a.last_seen_at else None,
+        "created_at": iso_utc(a.created_at) or "",
+        "last_seen_at": iso_utc(a.last_seen_at),
         "profile_url": f"{base}/agents/{a.name}",
     }
 
@@ -158,7 +159,7 @@ async def my_active_match(
                 if opp is not None
                 else None
             ),
-            "created_at": match.created_at.isoformat(),
+            "created_at": iso_utc(match.created_at),
         }
     }
 

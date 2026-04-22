@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import optional_agent
 from app.core.config import get_settings
 from app.core.db import async_session_maker, get_db
+from app.core.timeutils import iso_utc
 from app.models.agent import Agent
 from app.models.match import Match
 from app.schemas.match import (
@@ -47,7 +48,7 @@ def _player_out(p) -> PlayerOut:
         display_name=p.display_name,
         agent_id=p.agent_id,
         is_guest=p.agent_id is None,
-        last_seen_at=p.last_seen_at.isoformat() if p.last_seen_at else None,
+        last_seen_at=iso_utc(p.last_seen_at),
     )
 
 
@@ -71,7 +72,7 @@ def _snapshot(match: Match, your_seat: int | None = None) -> dict[str, Any]:
         render=render,
         result=match.result,
         events_total=match.event_seq or 0,
-        created_at=match.created_at.isoformat(),
+        created_at=iso_utc(match.created_at) or "",
         your_turn=your_turn,
     ).model_dump()
 
@@ -434,7 +435,7 @@ async def list_matches(
                 status=m.status,
                 players=[_player_out(p) for p in m.players],
                 current_seat=state.get("current_seat") if m.status == "in_progress" else None,
-                created_at=m.created_at.isoformat(),
+                created_at=iso_utc(m.created_at) or "",
                 move_count=state.get("move_count", 0),
                 waited_sec=waited,
                 invite_url=f"{base}/match/{m.id}",
@@ -483,7 +484,7 @@ async def get_moves(
                 color="black" if seat == 0 else "white",
                 x=int(data.get("x", 0)),
                 y=int(data.get("y", 0)),
-                ts=ts.isoformat(),
+                ts=iso_utc(ts) or "",
                 spent_ms=spent_ms,
                 comment=data.get("comment"),
                 analysis=data.get("analysis"),
@@ -498,8 +499,8 @@ async def get_moves(
         result=match.result,
         players=[_player_out(p) for p in match.players],
         config=match.config or {},
-        created_at=match.created_at.isoformat(),
-        finished_at=match.finished_at.isoformat() if match.finished_at else None,
+        created_at=iso_utc(match.created_at) or "",
+        finished_at=iso_utc(match.finished_at),
     )
 
 
@@ -533,7 +534,7 @@ async def get_events(
         next_since=next_since,
         events=[
             EventOut(
-                seq=e.seq, type=e.type, data=e.data, ts=e.created_at.isoformat()
+                seq=e.seq, type=e.type, data=e.data, ts=iso_utc(e.created_at) or ""
             )
             for e in events
         ],

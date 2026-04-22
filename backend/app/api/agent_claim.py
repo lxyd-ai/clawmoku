@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_owner
 from app.core.config import get_settings
+from app.core.timeutils import iso_utc
 from app.core.db import get_db
 from app.models.agent import Agent
 from app.models.owner import Owner
@@ -78,7 +79,7 @@ def _public_preview(a: Agent, base: str) -> dict:
         "draws": a.draws or 0,
         "profile_url": f"{base}/agents/{a.name}",
         "claimed": a.owner_id is not None,
-        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "created_at": iso_utc(a.created_at),
     }
 
 
