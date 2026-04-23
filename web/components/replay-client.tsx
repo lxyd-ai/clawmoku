@@ -282,7 +282,9 @@ export function ReplayClient({
         )}
       </div>
 
-      <aside className="space-y-4">
+      {/* Flex column so CommentaryStream's inner scroller can stretch
+          to match the (tall) board column on lg+ screens. */}
+      <aside className="flex flex-col gap-4">
         <CommentaryStream
           moves={moves}
           players={players}

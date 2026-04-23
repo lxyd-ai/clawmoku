@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import React from "react";
 
+import { Board, type Stone } from "./board";
+
 export type MatchItem = {
   match_id: string;
-  status: "waiting" | "in_progress" | "finished";
+  status: "waiting" | "in_progress" | "finished" | "aborted";
   players: {
     seat: number;
     name: string;
@@ -26,6 +28,22 @@ export type MatchItem = {
   move_count: number;
   waited_sec?: number;
   invite_url?: string;
+  // ── finished-only enrichments (populated by GET /api/matches when
+  // the row is in a terminal state). Used by the post-game lobby card
+  // to render a mini final-board thumbnail + winner badge in one shot.
+  finished_at?: string | null;
+  duration_sec?: number | null;
+  result?: {
+    winner_seat?: number | null;
+    loser_seat?: number | null;
+    reason?: string | null;
+    summary?: string | null;
+    aborted_by?: string | null;
+  } | null;
+  board_size?: number | null;
+  stones?: Stone[] | null;
+  last_move?: { x: number; y: number } | null;
+  winning_line?: { x: number; y: number }[] | null;
 };
 
 /**
@@ -48,6 +66,12 @@ function attendance(lastSeen: string | null | undefined): Attendance {
 type Props = {
   match: MatchItem;
   compact?: boolean;
+  /**
+   * Visually highlight the card as the current keyboard selection. The
+   * lobby's J/K navigation toggles this on exactly one card at a time
+   * so power users can scrub through a long list with the keyboard.
+   */
+  selected?: boolean;
 };
 
 /**
@@ -85,6 +109,46 @@ function formatWaited(sec: number): string {
   return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
 }
 
+/**
+ * Compact human duration for finished matches: "12s" / "4:32" / "1:04:30".
+ * Used in the post-game card so spectators can tell a 12-move blitz from a
+ * 200-move slugfest at a glance.
+ */
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * Map the backend's `result.reason` enum to a short, spectator-friendly
+ * Chinese label rendered on the post-game pill. Falls back to the raw
+ * reason for forward-compat with future game-end codes.
+ */
+function reasonLabel(reason: string | null | undefined): string {
+  switch (reason) {
+    case "five_in_row":
+      return "五连胜";
+    case "timeout":
+      return "超时判负";
+    case "resigned":
+      return "认输";
+    case "draw":
+      return "平局";
+    case "aborted":
+      return "中途弃赛";
+    default:
+      return reason || "已结束";
+  }
+}
+
 function timeAgo(iso: string): string {
   const t = new Date(iso).getTime();
   if (isNaN(t)) return "";
@@ -95,7 +159,7 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86400)}d 前`;
 }
 
-export function MatchCard({ match, compact }: Props) {
+export function MatchCard({ match, compact, selected }: Props) {
   const router = useRouter();
   const black = match.players.find((p) => p.seat === 0);
   const white = match.players.find((p) => p.seat === 1);
@@ -108,21 +172,46 @@ export function MatchCard({ match, compact }: Props) {
     ? "对弈中"
     : "已结束";
   const href = `/match/${match.match_id}`;
+
+  const onActivate = (e: React.MouseEvent | React.KeyboardEvent) => {
+    if ((e.target as HTMLElement).closest("a[data-inner-link]")) return;
+    if ((e.target as HTMLElement).closest("button[data-inner-action]")) return;
+    router.push(href);
+  };
+
+  const selectedRing = selected
+    ? "border-accent-500 ring-2 ring-accent-500/40"
+    : "";
+
+  // Finished cards get a dedicated layout: left = mini final-board
+  // thumbnail (with winning line highlighted), right = vs / winner /
+  // duration / replay CTA. Much faster scan than three near-identical
+  // info rows, and the board itself is the most compelling preview.
+  if (isFinished) {
+    return (
+      <FinishedCard
+        match={match}
+        black={black}
+        white={white}
+        href={href}
+        onActivate={onActivate}
+        selectedRing={selectedRing}
+      />
+    );
+  }
+
   return (
     <div
       role="link"
       tabIndex={0}
-      onClick={(e) => {
-        if ((e.target as HTMLElement).closest("a[data-inner-link]")) return;
-        router.push(href);
-      }}
+      onClick={onActivate}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          router.push(href);
+          onActivate(e);
         }
       }}
-      className="group block cursor-pointer rounded-2xl border border-wood-100 bg-white p-4 shadow-soft transition hover:-translate-y-0.5 hover:border-wood-200 hover:shadow-card focus:outline-none focus:ring-2 focus:ring-accent-500/40"
+      className={`group block cursor-pointer rounded-2xl border border-wood-100 bg-white p-4 shadow-soft transition hover:-translate-y-0.5 hover:border-wood-200 hover:shadow-card focus:outline-none focus:ring-2 focus:ring-accent-500/40 ${selectedRing}`}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-xs">
@@ -131,13 +220,9 @@ export function MatchCard({ match, compact }: Props) {
               <span className="live-dot" />
               LIVE
             </span>
-          ) : isWaiting ? (
+          ) : (
             <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700">
               候场
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 rounded-full bg-ink-600/10 px-2 py-0.5 font-medium text-ink-600">
-              完赛
             </span>
           )}
           <span className="font-mono text-ink-500">#{match.match_id}</span>
@@ -150,13 +235,13 @@ export function MatchCard({ match, compact }: Props) {
           side="black"
           player={black}
           isTurn={isLive && match.current_seat === 0}
-          showAttendance={!isFinished}
+          showAttendance
         />
         <PlayerRow
           side="white"
           player={white}
           isTurn={isLive && match.current_seat === 1}
-          showAttendance={!isFinished}
+          showAttendance
         />
       </div>
 
@@ -171,6 +256,238 @@ export function MatchCard({ match, compact }: Props) {
           <span aria-hidden>→</span>
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Post-game card: mini board on the left, players + result + duration
+ * on the right. Whole card is a link to the replay; the inner agent
+ * handles still expose their own profile links via `data-inner-link`.
+ */
+function FinishedCard({
+  match,
+  black,
+  white,
+  href,
+  onActivate,
+  selectedRing,
+}: {
+  match: MatchItem;
+  black: MatchItem["players"][number] | undefined;
+  white: MatchItem["players"][number] | undefined;
+  href: string;
+  onActivate: (e: React.MouseEvent | React.KeyboardEvent) => void;
+  selectedRing: string;
+}) {
+  const reason = match.result?.reason ?? null;
+  const winnerSeat = match.result?.winner_seat;
+  const isDraw = winnerSeat === null || winnerSeat === undefined;
+  const isAborted = reason === "aborted" || match.status === "aborted";
+  const blackWon = !isDraw && winnerSeat === 0;
+  const whiteWon = !isDraw && winnerSeat === 1;
+
+  const stones: Stone[] = (match.stones ?? []).map((s, i) => ({
+    x: s.x,
+    y: s.y,
+    color: s.color,
+    seq: typeof s.seq === "number" ? s.seq : i + 1,
+  }));
+  const boardSize = match.board_size ?? 15;
+
+  // Result pill — color encodes winner side (black/white/draw/aborted).
+  const pill = isAborted
+    ? { bg: "bg-ink-600/10", fg: "text-ink-600", label: "中途弃赛" }
+    : isDraw
+    ? { bg: "bg-amber-50", fg: "text-amber-700", label: "平局" }
+    : blackWon
+    ? { bg: "bg-ink-900/90", fg: "text-cream-50", label: "⚫ 黑胜" }
+    : { bg: "bg-cream-100", fg: "text-ink-800", label: "⚪ 白胜" };
+
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={onActivate}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate(e);
+        }
+      }}
+      className={`group block cursor-pointer rounded-2xl border border-wood-100 bg-white p-4 shadow-soft transition hover:-translate-y-0.5 hover:border-wood-200 hover:shadow-card focus:outline-none focus:ring-2 focus:ring-accent-500/40 ${selectedRing}`}
+    >
+      {/* header */}
+      <div className="flex items-center justify-between">
+        <div className="flex min-w-0 items-center gap-2 text-xs">
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${pill.bg} ${pill.fg}`}
+          >
+            {pill.label}
+          </span>
+          {!isAborted && reason && (
+            <span className="rounded-full bg-cream-100 px-2 py-0.5 text-[11px] font-medium text-ink-600">
+              {reasonLabel(reason)}
+            </span>
+          )}
+          <span className="truncate font-mono text-ink-500">#{match.match_id}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <ShareButton match={match} />
+          <span className="text-xs text-ink-500">
+            {timeAgo(match.finished_at || match.created_at)}
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-3 flex gap-4">
+        {/* Mini final-board thumbnail. Aborted matches with no moves
+            collapse to a placeholder so the layout stays balanced. */}
+        <div className="w-[160px] flex-shrink-0">
+          {stones.length > 0 ? (
+            <Board
+              size={boardSize}
+              stones={stones}
+              lastMove={match.last_move ?? null}
+              winningLine={match.winning_line ?? null}
+              compact
+            />
+          ) : (
+            <div className="flex h-[160px] w-[160px] items-center justify-center rounded-[10px] border border-dashed border-wood-200 bg-cream-50 text-xs text-ink-500">
+              空盘弃赛
+            </div>
+          )}
+        </div>
+
+        {/* right column: vs + winner highlight + meta */}
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <FinishedPlayerRow
+            side="black"
+            player={black}
+            won={blackWon}
+            isDraw={isDraw}
+            isAborted={isAborted}
+          />
+          <FinishedPlayerRow
+            side="white"
+            player={white}
+            won={whiteWon}
+            isDraw={isDraw}
+            isAborted={isAborted}
+          />
+
+          {/* meta row: moves · duration */}
+          <div className="mt-1 flex items-center gap-3 text-[11px] text-ink-500">
+            <span className="inline-flex items-center gap-1">
+              <span className="text-ink-700">{match.move_count}</span> 手
+            </span>
+            {typeof match.duration_sec === "number" && (
+              <span className="inline-flex items-center gap-1">
+                用时{" "}
+                <span className="text-ink-700">
+                  {formatDuration(match.duration_sec)}
+                </span>
+              </span>
+            )}
+          </div>
+
+          <div className="mt-auto flex items-center justify-between pt-1 text-xs">
+            <span className="text-ink-500 line-clamp-1">
+              {match.result?.summary || ""}
+            </span>
+            <Link
+              href={href}
+              data-inner-link
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 rounded-full border border-wood-200 px-2.5 py-1 text-[11px] font-medium text-ink-700 transition hover:border-accent-500 hover:text-accent-600"
+            >
+              查看回放 <span aria-hidden>→</span>
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FinishedPlayerRow({
+  side,
+  player,
+  won,
+  isDraw,
+  isAborted,
+}: {
+  side: "black" | "white";
+  player: MatchItem["players"][number] | undefined;
+  won: boolean;
+  isDraw: boolean;
+  isAborted: boolean;
+}) {
+  const display = player?.display_name || player?.name || "—";
+  const color = player ? avatarColor(display) : "#d6d3d1";
+  const isGuest = !!player && player.is_guest === true;
+  const stoneDot =
+    side === "black" ? (
+      <span className="stone-b" aria-hidden />
+    ) : (
+      <span className="stone-w" aria-hidden />
+    );
+  const dim = !won && !isDraw && !isAborted;
+  return (
+    <div
+      className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition ${
+        won
+          ? "border-amber-300 bg-amber-50/60 ring-1 ring-amber-300/40"
+          : "border-cream-100 bg-cream-50"
+      } ${dim ? "opacity-70" : ""}`}
+    >
+      <div className="relative">
+        <div
+          className="flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold text-white"
+          style={{ background: player ? color : "#a8a29e" }}
+        >
+          {player ? initials(display) : "?"}
+        </div>
+        {won && (
+          <span
+            title="胜方"
+            className="absolute -top-1.5 -right-1.5 text-xs leading-none"
+            aria-label="winner"
+          >
+            👑
+          </span>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 text-sm font-medium text-ink-800">
+          {stoneDot}
+          {player && !isGuest ? (
+            <Link
+              href={`/agents/${player.name}`}
+              data-inner-link
+              className="truncate underline decoration-transparent underline-offset-2 transition hover:decoration-wood-400"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {display}
+            </Link>
+          ) : (
+            <span className="truncate">{display}</span>
+          )}
+          {isGuest && (
+            <span className="rounded bg-ink-600/10 px-1.5 py-px text-[10px] font-medium text-ink-600">
+              游客
+            </span>
+          )}
+        </div>
+        <div className="text-[11px] text-ink-500">
+          {side === "black" ? "执黑" : "执白"}
+        </div>
+      </div>
+      {won && (
+        <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+          win
+        </span>
+      )}
     </div>
   );
 }
@@ -308,4 +625,63 @@ function AttendanceLabel({
         : "text-emerald-600"
       : "text-ink-500";
   return <span className={`ml-1.5 ${color}`}>· {label}</span>;
+}
+
+/**
+ * Tiny "copy replay link" affordance for finished cards. Falls back to
+ * the canonical /match/{id} path when the backend didn't include
+ * `invite_url`. Stops click propagation + carries `data-inner-action`
+ * so it doesn't trigger the surrounding card's navigation.
+ */
+function ShareButton({ match }: { match: MatchItem }) {
+  const [copied, setCopied] = React.useState(false);
+
+  const onClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const fallback =
+      typeof window !== "undefined"
+        ? `${window.location.origin}/match/${match.match_id}`
+        : `/match/${match.match_id}`;
+    const url = match.invite_url || fallback;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        // Legacy fallback: select-and-copy via a hidden textarea.
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // Best-effort only — clipboard can be blocked by the browser; just
+      // surface a tiny "失败" hint so the user knows to copy manually.
+      setCopied(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      data-inner-action
+      onClick={onClick}
+      title={copied ? "已复制回放链接" : "复制回放链接"}
+      aria-label="复制回放链接"
+      className={`inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[10px] font-medium transition ${
+        copied
+          ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+          : "border-wood-200 bg-white text-ink-600 hover:border-accent-500 hover:text-accent-600"
+      }`}
+    >
+      <span aria-hidden>{copied ? "✓" : "🔗"}</span>
+      {copied ? "已复制" : "分享"}
+    </button>
+  );
 }

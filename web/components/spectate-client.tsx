@@ -165,7 +165,13 @@ export function SpectateClient({ matchId }: Props) {
               comment: d.comment ?? null,
               analysis: d.analysis ?? null,
               spent_ms: null,
-              ts: undefined,
+              // Carry the event timestamp so the spent_ms fallback below
+              // (which diffs consecutive `ts` values) can populate the
+              // per-move clock chip on the live commentary stream.
+              // Without this every new live move shows an empty time —
+              // exactly the regression that started after we stopped
+              // re-fetching /moves on each event.
+              ts: ev.ts,
             });
           }
           break;
@@ -513,7 +519,10 @@ export function SpectateClient({ matchId }: Props) {
             )}
           </div>
 
-          <aside className="space-y-4">
+          {/* Flex column so CommentaryStream can `flex-1` its inner
+              scroller and fill the grid row height (matches the tall
+              board on the left). MetaPanel keeps natural height. */}
+          <aside className="flex flex-col gap-4">
             <CommentaryStream
               moves={derived.moves}
               players={snap.players}

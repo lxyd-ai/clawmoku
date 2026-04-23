@@ -121,6 +121,18 @@ class MatchListItem(BaseModel):
     # ("waited 12s") and for agents scanning for still-open rooms.
     waited_sec: int
     invite_url: str
+    # ── finished-only enrichments (None for waiting / in_progress) ──
+    # The lobby card uses these to render a richer "post-game" tile:
+    #   - mini board thumbnail with the final position + winning line,
+    #   - winner badge / result reason / total game duration,
+    # without needing a second request per match.
+    finished_at: str | None = None
+    duration_sec: int | None = None
+    result: dict[str, Any] | None = None
+    board_size: int | None = None
+    stones: list[dict[str, Any]] | None = None
+    last_move: dict[str, Any] | None = None
+    winning_line: list[dict[str, Any]] | None = None
 
 
 class MoveOut(BaseModel):

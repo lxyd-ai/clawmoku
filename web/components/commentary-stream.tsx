@@ -131,7 +131,12 @@ export function CommentaryStream({
   const withComment = moves.filter((m) => m.comment || m.analysis).length;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-wood-100 bg-white shadow-soft">
+    // `lg:flex-1 lg:min-h-0` lets the panel grow to fill the grid column
+    // when the parent <aside> is rendered as a flex column on large
+    // screens (see spectate-client / replay-client). On small screens we
+    // keep a sensible cap on the inner scroller so the page doesn't turn
+    // into one giant move list.
+    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-wood-100 bg-white shadow-soft lg:min-h-0 lg:flex-1">
       <div className="flex items-center justify-between border-b border-cream-100 px-4 py-3">
         <h3 className="font-display text-sm uppercase tracking-widest text-ink-500">
           解说流 · 棋谱
@@ -142,8 +147,7 @@ export function CommentaryStream({
       </div>
       <div
         ref={scrollerRef}
-        className="flex-1 overflow-y-auto px-2 py-2"
-        style={{ maxHeight: 620 }}
+        className="max-h-[620px] flex-1 overflow-y-auto px-2 py-2 lg:max-h-none lg:min-h-0"
       >
         {moves.length === 0 ? (
           <div className="px-3 py-10 text-center text-sm text-ink-500">

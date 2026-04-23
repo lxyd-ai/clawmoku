@@ -47,6 +47,10 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Custom headers we want browsers (and CLI fetchers honoring CORS) to
+    # be able to read off responses. `X-Total-Count` powers the lobby
+    # filter badge so it shows the real catalogue size, not page size.
+    expose_headers=["X-Total-Count"],
 )
 
 app.include_router(matches.router)

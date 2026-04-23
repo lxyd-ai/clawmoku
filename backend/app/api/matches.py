@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import optional_agent
@@ -397,14 +397,16 @@ async def get_match(
 
 @router.get("/matches", response_model=list[MatchListItem])
 async def list_matches(
+    response: Response,
     status: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     sort: str = Query(
-        default="newest",
-        pattern="^(newest|oldest)$",
-        description="newest = latest first (default, good for lobby); "
-        "oldest = longest-waiting first (handy for agents hunting "
-        "for rooms that really need an opponent).",
+        default="auto",
+        pattern="^(auto|newest|oldest|recent_finished)$",
+        description="auto = smart per-status default (finished → recent_finished, "
+        "others → newest); newest = latest created first; oldest = longest-waiting "
+        "first (handy for agents hunting open rooms); recent_finished = most "
+        "recently concluded first.",
     ),
     agent: str | None = Query(
         default=None,
@@ -412,13 +414,55 @@ async def list_matches(
         "proxies (partner-spec v1 §8) use `?agent=<handle>&status=in_progress` "
         "to reap stale rooms for a given proxied agent.",
     ),
+    before: str | None = Query(
+        default=None,
+        description="Cursor: ISO-8601 timestamp. Returns rows whose sort "
+        "column (finished_at for `recent_finished`, otherwise created_at) "
+        "is strictly less than this value. Use the smallest value from the "
+        "previous page to fetch the next page (lobby 'load more').",
+    ),
     session: AsyncSession = Depends(get_db),
 ):
     from datetime import datetime, timezone
 
+    effective_sort = sort
+    if sort == "auto":
+        effective_sort = "recent_finished" if status == "finished" else "newest"
+
+    before_dt: datetime | None = None
+    if before:
+        try:
+            # Accept either '...Z' or full offset; normalise to aware UTC.
+            raw = before.replace("Z", "+00:00")
+            before_dt = datetime.fromisoformat(raw)
+            if before_dt.tzinfo is None:
+                before_dt = before_dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_cursor",
+                    "message": "`before` must be an ISO-8601 timestamp",
+                },
+            ) from None
+
     matches = await match_service.list_matches(
-        session, status=status, limit=limit, sort=sort, agent_name=agent
+        session,
+        status=status,
+        limit=limit,
+        sort=effective_sort,
+        agent_name=agent,
+        before=before_dt,
     )
+
+    # Real total — independent of `limit`. Powers the lobby filter
+    # badge ("完赛 247") so it reflects the catalogue, not the page.
+    # CORS-friendly Access-Control-Expose-Headers is set globally in main.py.
+    total = await match_service.count_matches(
+        session, status=status, agent_name=agent
+    )
+    response.headers["X-Total-Count"] = str(total)
+
     base = get_settings().public_base_url.rstrip("/")
     now = datetime.now(timezone.utc)
     out = []
@@ -429,6 +473,32 @@ async def list_matches(
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
         waited = max(0, int((now - created).total_seconds()))
+
+        finished_iso: str | None = None
+        duration_sec: int | None = None
+        result_payload: dict[str, Any] | None = None
+        board_size: int | None = None
+        stones_payload: list[dict[str, Any]] | None = None
+        last_move_payload: dict[str, Any] | None = None
+        winning_line_payload: list[dict[str, Any]] | None = None
+
+        if m.status in ("finished", "aborted"):
+            finished = m.finished_at
+            if finished is not None:
+                if finished.tzinfo is None:
+                    finished = finished.replace(tzinfo=timezone.utc)
+                finished_iso = iso_utc(m.finished_at)
+                duration_sec = max(0, int((finished - created).total_seconds()))
+            # `result` may be None for legacy aborted rows; pass through as-is.
+            result_payload = m.result
+            # Mini final-board payload — render once on the server so the
+            # lobby card doesn't have to fan out N extra requests.
+            render = gomoku_rules.render_snapshot(state)
+            board_size = int(render.get("board_size") or state.get("board_size") or 15)
+            stones_payload = render.get("stones") or []
+            last_move_payload = render.get("last_move")
+            winning_line_payload = render.get("winning_line")
+
         out.append(
             MatchListItem(
                 match_id=m.id,
@@ -439,6 +509,13 @@ async def list_matches(
                 move_count=state.get("move_count", 0),
                 waited_sec=waited,
                 invite_url=f"{base}/match/{m.id}",
+                finished_at=finished_iso,
+                duration_sec=duration_sec,
+                result=result_payload,
+                board_size=board_size,
+                stones=stones_payload,
+                last_move=last_move_payload,
+                winning_line=winning_line_payload,
             )
         )
     return out
@@ -540,3 +617,32 @@ async def get_events(
         ],
         status=match.status,
     )
+
+
+# ── GET /api/lobby/today_stats ────────────────────────────────────
+#
+# Lightweight aggregate that powers the lobby header strip: total finished
+# matches, average move count, longest game, top winning agent — all over
+# a configurable rolling window (defaults to the last 24 hours, which we
+# label "今日" in the UI without having to negotiate a timezone).
+
+
+@router.get("/lobby/today_stats")
+async def lobby_today_stats(
+    hours: int = Query(
+        default=24,
+        ge=1,
+        le=168,
+        description="Window size in hours (max 7 days).",
+    ),
+    session: AsyncSession = Depends(get_db),
+):
+    from datetime import datetime, timedelta, timezone
+
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    stats = await match_service.lobby_stats(session, since=since)
+    return {
+        "window_hours": hours,
+        "since": iso_utc(since),
+        **stats,
+    }

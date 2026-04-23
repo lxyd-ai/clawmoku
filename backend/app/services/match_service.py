@@ -666,11 +666,29 @@ async def list_matches(
     limit: int = 50,
     sort: str = "newest",
     agent_name: str | None = None,
+    before: datetime | None = None,
 ) -> list[Match]:
-    order = Match.created_at.asc() if sort == "oldest" else Match.created_at.desc()
-    stmt = select(Match).order_by(order).limit(limit)
+    # `recent_finished` orders by finished_at DESC (NULL last). It's the
+    # natural sort for the lobby's "完赛" tab — users want to see the
+    # most recently concluded games first, not the most recently *started*
+    # ones (which can drift if a long game ends after a short one starts).
+    if sort == "recent_finished":
+        order = (Match.finished_at.is_(None), Match.finished_at.desc())
+        cursor_col = Match.finished_at
+    elif sort == "oldest":
+        order = (Match.created_at.asc(),)
+        cursor_col = None  # ascending pagination not needed yet
+    else:
+        order = (Match.created_at.desc(),)
+        cursor_col = Match.created_at
+    stmt = select(Match).order_by(*order).limit(limit)
     if status:
         stmt = stmt.where(Match.status == status)
+    if before is not None and cursor_col is not None:
+        # Strict-less-than gives a stable cursor for "load more" — clients
+        # pass back the smallest timestamp from the previous page and we
+        # never repeat a row even if new ones land at the head.
+        stmt = stmt.where(cursor_col < before)
     if agent_name:
         # Join to match_players to filter by handle. Upstream proxies (spec
         # §8 checklist) use `?agent=<handle>&status=in_progress` to locate
@@ -680,6 +698,107 @@ async def list_matches(
         ).distinct()
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def count_matches(
+    session: AsyncSession,
+    status: str | None = None,
+    agent_name: str | None = None,
+) -> int:
+    """Total row count for the same filters as `list_matches`.
+
+    Used by the lobby badge so "完赛 247" reflects reality rather than
+    the response page size. Cheap because matches table is small relative
+    to events; if it ever isn't, we'd cache or paginate from the client.
+    """
+    stmt = select(func.count(Match.id))
+    if status:
+        stmt = stmt.where(Match.status == status)
+    if agent_name:
+        stmt = stmt.join(MatchPlayer, MatchPlayer.match_id == Match.id).where(
+            MatchPlayer.name == agent_name.strip().lower()
+        )
+    result = await session.execute(stmt)
+    return int(result.scalar() or 0)
+
+
+async def lobby_stats(
+    session: AsyncSession, *, since: datetime
+) -> dict[str, Any]:
+    """Aggregate dashboard stats for matches finished after `since`.
+
+    Used by the lobby header to summarise "what happened recently"
+    without forcing the client to scan the full list. Returns:
+      - total: int           # finished matches in window
+      - avg_moves: float     # mean move_count, 0 if window empty
+      - longest: int         # max move_count seen
+      - decisive: int        # matches with a non-null winner_seat
+      - draws: int           # explicit draw / no-winner outcomes
+      - top_agent: {name, display_name, wins} | None
+                              # most-wins agent inside the window
+    """
+    finished_stmt = (
+        select(Match)
+        .where(Match.status == "finished")
+        .where(Match.finished_at.is_not(None))
+        .where(Match.finished_at >= since)
+    )
+    rows = list((await session.execute(finished_stmt)).scalars().all())
+
+    if not rows:
+        return {
+            "total": 0,
+            "avg_moves": 0.0,
+            "longest": 0,
+            "decisive": 0,
+            "draws": 0,
+            "top_agent": None,
+        }
+
+    total = len(rows)
+    move_counts = [int((m.state or {}).get("move_count", 0)) for m in rows]
+    avg_moves = sum(move_counts) / total if total else 0.0
+    longest = max(move_counts) if move_counts else 0
+
+    decisive = 0
+    draws = 0
+    win_count_by_agent_id: dict[str, int] = {}
+    for m in rows:
+        result = m.result or {}
+        winner_seat = result.get("winner_seat")
+        if winner_seat is None:
+            draws += 1
+            continue
+        decisive += 1
+        winner_player = next(
+            (p for p in m.players if p.seat == winner_seat), None
+        )
+        if winner_player is not None and winner_player.agent_id:
+            win_count_by_agent_id[winner_player.agent_id] = (
+                win_count_by_agent_id.get(winner_player.agent_id, 0) + 1
+            )
+
+    top_agent: dict[str, Any] | None = None
+    if win_count_by_agent_id:
+        top_agent_id, top_wins = max(
+            win_count_by_agent_id.items(), key=lambda kv: kv[1]
+        )
+        agent = await session.get(Agent, top_agent_id)
+        if agent is not None:
+            top_agent = {
+                "name": agent.name,
+                "display_name": agent.display_name,
+                "wins": top_wins,
+            }
+
+    return {
+        "total": total,
+        "avg_moves": round(avg_moves, 1),
+        "longest": longest,
+        "decisive": decisive,
+        "draws": draws,
+        "top_agent": top_agent,
+    }
 
 
 # ── resign (in_progress only) ──────────────────────────────────────
