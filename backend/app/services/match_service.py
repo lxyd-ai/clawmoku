@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import noload
 
 from app.core.config import get_settings
 from app.core.db import async_session_maker
@@ -681,7 +682,14 @@ async def list_matches(
     else:
         order = (Match.created_at.desc(),)
         cursor_col = Match.created_at
-    stmt = select(Match).order_by(*order).limit(limit)
+    # Match.events is `lazy="selectin"` so a vanilla `select(Match)` will
+    # auto-fire a follow-up `SELECT * FROM match_events WHERE match_id IN
+    # (...)` that pulls every move of every match in the page. For long
+    # finished games (180+ moves) that explodes a 3-row lobby query into
+    # 500+ event rows of JSON, taking 9+ seconds and starving the single
+    # FastAPI worker. The lobby never reads events — they're for replay /
+    # spectate only — so we explicitly `noload` here.
+    stmt = select(Match).options(noload(Match.events)).order_by(*order).limit(limit)
     if status:
         stmt = stmt.where(Match.status == status)
     if before is not None and cursor_col is not None:
@@ -737,8 +745,13 @@ async def lobby_stats(
       - top_agent: {name, display_name, wins} | None
                               # most-wins agent inside the window
     """
+    # Same `noload(Match.events)` trick as `list_matches`: with the default
+    # `lazy="selectin"`, scanning the last 24h of finished matches (~400
+    # rows) would pull ~10k+ event rows we don't read, blowing this query
+    # past 20 seconds and freezing the lobby's "今日数据" strip.
     finished_stmt = (
         select(Match)
+        .options(noload(Match.events))
         .where(Match.status == "finished")
         .where(Match.finished_at.is_not(None))
         .where(Match.finished_at >= since)

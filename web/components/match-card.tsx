@@ -418,6 +418,15 @@ function FinishedCard({
   );
 }
 
+/**
+ * Single-line player row used inside the post-game FinishedCard. The
+ * lobby grid jumps to 3-up at xl, leaving ~170px for the right column,
+ * which is too tight for the previous "avatar + name + 执黑/执白 + WIN"
+ * layout — every other row wrapped and the column looked broken. We
+ * drop the avatar circle and the redundant 执黑/执白 caption (the stone
+ * dot already encodes side) and keep only what a glance actually needs:
+ * stone color, name, and a winner mark.
+ */
 function FinishedPlayerRow({
   side,
   player,
@@ -432,68 +441,50 @@ function FinishedPlayerRow({
   isAborted: boolean;
 }) {
   const display = player?.display_name || player?.name || "—";
-  const color = player ? avatarColor(display) : "#d6d3d1";
   const isGuest = !!player && player.is_guest === true;
   const stoneDot =
     side === "black" ? (
-      <span className="stone-b" aria-hidden />
+      <span className="stone-b shrink-0" aria-hidden />
     ) : (
-      <span className="stone-w" aria-hidden />
+      <span className="stone-w shrink-0" aria-hidden />
     );
   const dim = !won && !isDraw && !isAborted;
   return (
     <div
-      className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition ${
+      className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-sm transition ${
         won
-          ? "border-amber-300 bg-amber-50/60 ring-1 ring-amber-300/40"
+          ? "border-amber-300 bg-amber-50/70 ring-1 ring-amber-300/40"
           : "border-cream-100 bg-cream-50"
       } ${dim ? "opacity-70" : ""}`}
     >
-      <div className="relative">
-        <div
-          className="flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold text-white"
-          style={{ background: player ? color : "#a8a29e" }}
-        >
-          {player ? initials(display) : "?"}
-        </div>
-        {won && (
-          <span
-            title="胜方"
-            className="absolute -top-1.5 -right-1.5 text-xs leading-none"
-            aria-label="winner"
+      {stoneDot}
+      <div className="flex min-w-0 flex-1 items-center gap-1">
+        {player && !isGuest ? (
+          <Link
+            href={`/agents/${player.name}`}
+            data-inner-link
+            className="min-w-0 truncate font-medium text-ink-800 underline decoration-transparent underline-offset-2 transition hover:decoration-wood-400"
+            onClick={(e) => e.stopPropagation()}
           >
-            👑
+            {display}
+          </Link>
+        ) : (
+          <span className="min-w-0 truncate font-medium text-ink-800">
+            {display}
+          </span>
+        )}
+        {isGuest && (
+          <span
+            title="未注册的游客"
+            className="shrink-0 text-[10px] text-ink-500"
+          >
+            (游)
           </span>
         )}
       </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 text-sm font-medium text-ink-800">
-          {stoneDot}
-          {player && !isGuest ? (
-            <Link
-              href={`/agents/${player.name}`}
-              data-inner-link
-              className="truncate underline decoration-transparent underline-offset-2 transition hover:decoration-wood-400"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {display}
-            </Link>
-          ) : (
-            <span className="truncate">{display}</span>
-          )}
-          {isGuest && (
-            <span className="rounded bg-ink-600/10 px-1.5 py-px text-[10px] font-medium text-ink-600">
-              游客
-            </span>
-          )}
-        </div>
-        <div className="text-[11px] text-ink-500">
-          {side === "black" ? "执黑" : "执白"}
-        </div>
-      </div>
       {won && (
-        <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
-          win
+        <span title="胜方" aria-label="winner" className="shrink-0 text-xs">
+          👑
         </span>
       )}
     </div>
