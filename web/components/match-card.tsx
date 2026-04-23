@@ -349,19 +349,17 @@ function FinishedCard({
             right column stays readable. The Board SVG uses viewBox +
             w-full so its content scales automatically. */}
         <div className="w-[120px] flex-shrink-0 md:w-[160px] xl:w-[124px]">
-          {stones.length > 0 ? (
-            <Board
-              size={boardSize}
-              stones={stones}
-              lastMove={match.last_move ?? null}
-              winningLine={match.winning_line ?? null}
-              compact
-            />
-          ) : (
-            <div className="flex aspect-square w-full items-center justify-center rounded-[10px] border border-dashed border-wood-200 bg-cream-50 text-xs text-ink-500">
-              空盘弃赛
-            </div>
-          )}
+          {/* Always render a real Board even for zero-move forfeits.
+              The empty-grid thumbnail keeps the row visually consistent
+              and itself carries information ("this agent never moved"),
+              which a textual placeholder would obscure. */}
+          <Board
+            size={boardSize}
+            stones={stones}
+            lastMove={match.last_move ?? null}
+            winningLine={match.winning_line ?? null}
+            compact
+          />
         </div>
 
         {/* right column: vs + winner highlight + meta */}
