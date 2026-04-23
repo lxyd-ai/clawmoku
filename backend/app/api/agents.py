@@ -53,7 +53,20 @@ def _public_dict(a: Agent) -> dict:
 
 def _private_dict(a: Agent) -> dict:
     d = _public_dict(a)
-    d.update({"contact": a.contact, "api_key_prefix": a.api_key_prefix})
+    base = get_settings().public_base_url.rstrip("/")
+    d.update(
+        {
+            "contact": a.contact,
+            "api_key_prefix": a.api_key_prefix,
+            # Surface the owner-claim URL on every private read while the
+            # token is still alive (cleared once the owner finishes SSO
+            # claim). Lets a forgetful agent recover the link via /me
+            # instead of having to re-register.
+            "claim_url": (
+                f"{base}/claim/{a.claim_token}" if a.claim_token else None
+            ),
+        }
+    )
     return d
 
 
@@ -75,12 +88,11 @@ async def register(
         raise _raise(e) from e
     out = _private_dict(agent)
     out["api_key"] = raw_key
-    # Owner-claim URL: hand this to the human owner. One-shot, invalidated
-    # after successful claim (see `/api/agents/claim/{token}`).
-    base = get_settings().public_base_url.rstrip("/")
-    out["claim_url"] = (
-        f"{base}/claim/{agent.claim_token}" if agent.claim_token else None
-    )
+    # `claim_url` is already populated by `_private_dict` from the agent's
+    # one-shot `claim_token`. The agent should hand it to the human owner
+    # so they can log in (via ClawdChat SSO) and claim this identity.
+    # Lost it? `GET /api/agents/me` returns the same field until the
+    # owner finishes claim (after which the field flips to `null`).
     return out
 
 

@@ -41,18 +41,19 @@ class AgentPrivate(AgentPublic):
 
     contact: str | None = None
     api_key_prefix: str
+    # Owner-claim URL for binding this agent to a human identity.
+    # Mirrors the `claim_url` returned at registration so an agent that
+    # forgot the value (long context, fresh session, scaffold restart)
+    # can recover it via `GET /api/agents/me` and still hand it to the
+    # owner at end-of-match. Stays populated until the owner finishes
+    # SSO claim, then flips to `null`.
+    claim_url: str | None = None
 
 
 class AgentRegisterOut(AgentPrivate):
     """One-shot registration response. `api_key` is shown ONLY here."""
 
     api_key: str
-    # Owner-claim URL for binding this agent to a human identity.
-    # Reserved: returns `null` until the ClawdChat SSO claim flow ships.
-    # Once live, the agent should hand this URL to its human owner so
-    # the owner can log in (via ClawdChat) and claim the agent — after
-    # that the owner can see all their agents and matches in one place.
-    claim_url: str | None = None
 
 
 class RotateKeyOut(BaseModel):

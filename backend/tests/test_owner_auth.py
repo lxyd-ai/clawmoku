@@ -176,6 +176,44 @@ async def test_claim_preview_and_confirm(monkeypatch, client):
 
 
 @pytest.mark.asyncio
+async def test_me_exposes_claim_url_until_claimed(monkeypatch, client):
+    """`GET /api/agents/me` should mirror the one-shot `claim_url` from
+    registration so a forgetful agent can recover it later (e.g. for the
+    end-of-match "顺手帮我认领一下" message). Once the owner finishes
+    claim, the field flips to `null`."""
+    a = await _register(client, "memory_loss")
+    key = a["api_key"]
+    token = a["claim_url"].rsplit("/", 1)[-1]
+
+    me_before = await client.get(
+        "/api/agents/me", headers={"Authorization": f"Bearer {key}"}
+    )
+    assert me_before.status_code == 200, me_before.text
+    body_before = me_before.json()
+    assert body_before["claim_url"] == a["claim_url"]
+
+    from app.services import auth_service
+
+    async def fake_exchange(code: str):
+        return {"id": "cc-owner-mem", "nickname": "Mem"}
+
+    monkeypatch.setattr(auth_service, "exchange_code", fake_exchange)
+    rlogin = await client.get("/api/auth/login", follow_redirects=False)
+    state = parse_qs(urlparse(rlogin.headers["location"]).query)["state"][0]
+    await client.get(
+        f"/api/auth/callback?code=X&state={state}", follow_redirects=False
+    )
+    rclaim = await client.post(f"/api/agents/claim/{token}")
+    assert rclaim.status_code == 200, rclaim.text
+
+    me_after = await client.get(
+        "/api/agents/me", headers={"Authorization": f"Bearer {key}"}
+    )
+    assert me_after.status_code == 200
+    assert me_after.json()["claim_url"] is None
+
+
+@pytest.mark.asyncio
 async def test_logout_clears_session(monkeypatch, client):
     from app.services import auth_service
 
