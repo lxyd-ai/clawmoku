@@ -26,6 +26,12 @@
 #   bash deploy.sh smoke          # just run smoke tests
 #   bash deploy.sh backups        # list recent server-side DB backups
 #
+# DO NOT run as `bash deploy.sh | tail -N`. Pipeline buffering will hide
+# every intermediate line — including the build progress and the OOM
+# canaries — until after the deploy returns, which makes a stuck deploy
+# look identical to a healthy one. Just run the script directly and let
+# it stream to your terminal.
+#
 # Env overrides (all optional):
 #   CLAWMOKU_PROD_HOST=8.217.39.83
 #   CLAWMOKU_PROD_DIR=/srv/clawmoku
@@ -50,20 +56,30 @@ BACKUP_DIR="${CLAWMOKU_BACKUP_DIR:-/var/backups/clawmoku}"
 PASSWORD="${CLAWMOKU_PROD_PASSWORD:-***REMOVED***}"
 
 # ---------- ssh wrapper: use sshpass if password given, else plain ssh ----------
+# `ServerAliveInterval=15 + CountMax=8` keeps the long-running build ssh
+# session from getting reaped by NAT/firewall idle timers, which used to
+# show up as "the deploy hung after 6 minutes" when the heredoc went
+# silent during a slow `npm ci`. The values give us 15s × 8 = 2min of
+# silence tolerance, which is more than the longest internal step.
+SSH_OPTS=(
+  -o StrictHostKeyChecking=no
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=8
+)
 if [ -n "$PASSWORD" ]; then
   if ! command -v sshpass >/dev/null 2>&1; then
     echo "sshpass not installed but CLAWMOKU_PROD_PASSWORD is set." >&2
     echo "Install via: brew install sshpass" >&2
     exit 1
   fi
-  _ssh()   { sshpass -p "$PASSWORD" ssh   -o StrictHostKeyChecking=no "$@"; }
+  _ssh()   { sshpass -p "$PASSWORD" ssh   "${SSH_OPTS[@]}" "$@"; }
   _rsync() { sshpass -p "$PASSWORD" rsync "$@"; }
-  _scp()   { sshpass -p "$PASSWORD" scp   -o StrictHostKeyChecking=no "$@"; }
+  _scp()   { sshpass -p "$PASSWORD" scp   "${SSH_OPTS[@]}" "$@"; }
 else
   echo "Note: CLAWMOKU_PROD_PASSWORD unset; assuming ssh-agent / key-based auth."
-  _ssh()   { ssh   -o StrictHostKeyChecking=no "$@"; }
+  _ssh()   { ssh   "${SSH_OPTS[@]}" "$@"; }
   _rsync() { rsync "$@"; }
-  _scp()   { scp   -o StrictHostKeyChecking=no "$@"; }
+  _scp()   { scp   "${SSH_OPTS[@]}" "$@"; }
 fi
 rssh() { _ssh "root@$HOST" "$@"; }
 
@@ -85,6 +101,12 @@ snapshot_db() {
 rsync_code() {
   echo "==> [rsync] $REPO_ROOT → $HOST:$REMOTE_DIR"
   echo "            (code tree only; DB at $DB_PATH is outside and untouchable)"
+  # Wipe any leftover staging dir from a previous interrupted deploy
+  # before rsync runs. Otherwise --delete trips on `web.build/` because
+  # it exists locally too only as a missing path → noisy "cannot delete
+  # non-empty directory" warnings, plus a small risk of stale node_modules
+  # surviving into the next staging cycle.
+  rssh "rm -rf '$REMOTE_DIR/web.build' || true" 2>/dev/null || true
   _rsync -az --delete \
     --exclude='data/' \
     --exclude='backups/' \
@@ -119,31 +141,65 @@ remote_build() {
   # the latter silently swallowed the `npm ci / next build` step in
   # practice (shell quoting + line-continuation interactions). Heredoc
   # is unambiguous and trivially readable.
+  #
+  # Robustness guard rails (added 2026-04-23 after a deploy OOM'd the
+  # whole VM and took sshd / nginx down with it for ~5 minutes):
+  #   - Cap node's heap (`NODE_OPTIONS=--max-old-space-size=1024`) so
+  #     `next build` self-aborts before pushing the box into swap-thrash.
+  #   - Wrap the build in `timeout 300` so a stuck process can't ride
+  #     the ssh session into oblivion either.
+  #   - Print `free -m` before & after the build so OOMs leave a paper
+  #     trail in the deploy log instead of just "ssh hung at minute 6".
+  #   - Each remote step is timestamped via STEP() — easy to spot which
+  #     phase ran how long.
   echo "==> [build] staging build → swap → restart (prod stays up during build)"
-  if [ -n "$PASSWORD" ]; then
-    sshpass -p "$PASSWORD" ssh -o StrictHostKeyChecking=no "root@$HOST" \
-      "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE_SH'
+  rssh "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE_SH'
 set -euo pipefail
 : "${REMOTE_DIR:?REMOTE_DIR unset}"
 STAGE="$REMOTE_DIR/web.build"
 
-echo "  • chown code tree"
+STEP() { printf '  • [%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+
+STEP "chown code tree"
 chown -R clawmoku:clawmoku "$REMOTE_DIR"
 
-echo "  • backend: pip install -e (safe — running process restarts at end)"
+STEP "backend: pip install -e (safe — running process restarts at end)"
 sudo -u clawmoku "$REMOTE_DIR/backend/.venv/bin/pip" install -e "$REMOTE_DIR/backend" --quiet
 
-echo "  • frontend: prepare staging at $STAGE (hard-linked copy)"
+STEP "frontend: prepare staging at $STAGE (hard-linked copy)"
 rm -rf "$STAGE"
 sudo -u clawmoku cp -al "$REMOTE_DIR/web" "$STAGE"
 # Break hard links to prod's node_modules/.next so the rebuild below
 # can't accidentally mutate the tree the live process is serving from.
 sudo -u clawmoku rm -rf "$STAGE/node_modules" "$STAGE/.next"
 
-echo "  • frontend: npm ci + next build (prod still serving from old .next)"
-sudo -u clawmoku bash -lc "cd '$STAGE' && npm ci --silent && npm run build"
+STEP "memory snapshot before build:"
+free -m | sed 's/^/      /'
 
-echo "  • swap: atomic mv of node_modules/ and .next/ into prod web dir"
+STEP "frontend: npm ci + next build (heap cap 1024M, 5min hard timeout)"
+# - NODE_OPTIONS caps V8 heap so next build aborts itself on memory
+#   pressure instead of hanging the whole box.
+# - `timeout 300` is the brick wall — anything beyond 5min means
+#   something is wrong, and we'd rather fail the deploy and keep prod
+#   serving the old build than silently chew through swap.
+# - `--no-audit --no-fund` shaves a few seconds off npm ci that we don't
+#   need on a deploy machine.
+if ! sudo -u clawmoku bash -lc "
+  set -euo pipefail
+  cd '$STAGE'
+  npm ci --silent --no-audit --no-fund
+  NODE_OPTIONS='--max-old-space-size=1024' timeout 300 npm run build
+"; then
+  echo "  !! build failed or timed out — leaving prod on its current .next" >&2
+  STEP "memory snapshot at failure:"
+  free -m | sed 's/^/      /'
+  exit 1
+fi
+
+STEP "memory snapshot after build:"
+free -m | sed 's/^/      /'
+
+STEP "swap: atomic mv of node_modules/ and .next/ into prod web dir"
 cd "$REMOTE_DIR/web"
 [ -d node_modules ] && mv node_modules .node_modules.old
 mv "$STAGE/node_modules" ./node_modules
@@ -152,35 +208,11 @@ mv "$STAGE/.next" ./.next
 chown -R clawmoku:clawmoku node_modules .next
 rm -rf "$STAGE" .next.old .node_modules.old
 
-echo "  • restart: clawmoku-api + clawmoku-web (only downtime, ~2s)"
+STEP "restart: clawmoku-api + clawmoku-web (only downtime, ~2s)"
 systemctl restart clawmoku-api clawmoku-web
 sleep 2
 systemctl is-active clawmoku-api clawmoku-web
 REMOTE_SH
-  else
-    ssh -o StrictHostKeyChecking=no "root@$HOST" \
-      "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE_SH'
-set -euo pipefail
-: "${REMOTE_DIR:?REMOTE_DIR unset}"
-STAGE="$REMOTE_DIR/web.build"
-chown -R clawmoku:clawmoku "$REMOTE_DIR"
-sudo -u clawmoku "$REMOTE_DIR/backend/.venv/bin/pip" install -e "$REMOTE_DIR/backend" --quiet
-rm -rf "$STAGE"
-sudo -u clawmoku cp -al "$REMOTE_DIR/web" "$STAGE"
-sudo -u clawmoku rm -rf "$STAGE/node_modules" "$STAGE/.next"
-sudo -u clawmoku bash -lc "cd '$STAGE' && npm ci --silent && npm run build"
-cd "$REMOTE_DIR/web"
-[ -d node_modules ] && mv node_modules .node_modules.old
-mv "$STAGE/node_modules" ./node_modules
-[ -d .next ] && mv .next .next.old
-mv "$STAGE/.next" ./.next
-chown -R clawmoku:clawmoku node_modules .next
-rm -rf "$STAGE" .next.old .node_modules.old
-systemctl restart clawmoku-api clawmoku-web
-sleep 2
-systemctl is-active clawmoku-api clawmoku-web
-REMOTE_SH
-  fi
 }
 
 smoke() {
