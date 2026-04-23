@@ -340,10 +340,15 @@ function FinishedCard({
         </div>
       </div>
 
-      <div className="mt-3 flex gap-4">
-        {/* Mini final-board thumbnail. Aborted matches with no moves
-            collapse to a placeholder so the layout stays balanced. */}
-        <div className="w-[160px] flex-shrink-0">
+      <div className="mt-3 flex gap-3 sm:gap-4">
+        {/* Mini final-board thumbnail. Width is responsive because the
+            lobby grid jumps from 2-up (md) to 3-up (xl), shrinking each
+            card to ~340px wide; a fixed 160px board left only ~140px
+            for the right column and crushed the "查看回放" CTA into a
+            vertical strip. We shrink the board on the 3-up grid so the
+            right column stays readable. The Board SVG uses viewBox +
+            w-full so its content scales automatically. */}
+        <div className="w-[120px] flex-shrink-0 md:w-[160px] xl:w-[124px]">
           {stones.length > 0 ? (
             <Board
               size={boardSize}
@@ -353,7 +358,7 @@ function FinishedCard({
               compact
             />
           ) : (
-            <div className="flex h-[160px] w-[160px] items-center justify-center rounded-[10px] border border-dashed border-wood-200 bg-cream-50 text-xs text-ink-500">
+            <div className="flex aspect-square w-full items-center justify-center rounded-[10px] border border-dashed border-wood-200 bg-cream-50 text-xs text-ink-500">
               空盘弃赛
             </div>
           )}
@@ -391,17 +396,22 @@ function FinishedCard({
             )}
           </div>
 
-          <div className="mt-auto flex items-center justify-between pt-1 text-xs">
-            <span className="text-ink-500 line-clamp-1">
+          <div className="mt-auto flex items-center justify-between gap-2 pt-1 text-xs">
+            {/* `flex-1 min-w-0` + `truncate` on summary, and
+                `flex-shrink-0` + `whitespace-nowrap` on the CTA so the
+                right column never crushes the link into a vertical
+                stack on the 3-up grid. */}
+            <span className="min-w-0 flex-1 truncate text-ink-500">
               {match.result?.summary || ""}
             </span>
             <Link
               href={href}
               data-inner-link
               onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 rounded-full border border-wood-200 px-2.5 py-1 text-[11px] font-medium text-ink-700 transition hover:border-accent-500 hover:text-accent-600"
+              className="inline-flex flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-wood-200 px-2.5 py-1 text-[11px] font-medium text-ink-700 transition hover:border-accent-500 hover:text-accent-600"
             >
-              查看回放 <span aria-hidden>→</span>
+              <span className="hidden sm:inline">查看</span>回放
+              <span aria-hidden>→</span>
             </Link>
           </div>
         </div>
